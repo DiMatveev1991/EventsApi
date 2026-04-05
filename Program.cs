@@ -27,7 +27,6 @@ app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
 	options.SwaggerEndpoint("/swagger/v1/swagger.json", "Events API v1");
-	options.RoutePrefix = string.Empty; // Swagger открывается на http://localhost:5000
 });
 
 app.UseHttpsRedirection();
