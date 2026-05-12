@@ -22,6 +22,9 @@ namespace EventsApi.Exceptions
 
         public static NotFoundException ForEvent(Guid id) =>
             new($"Мероприятие с ID {id} не найдено");
+
+        public static NotFoundException ForBooking(Guid id) =>
+            new($"Бронь с ID {id} не найдена");
     }
 
     /// <summary>400 Bad Request.</summary>

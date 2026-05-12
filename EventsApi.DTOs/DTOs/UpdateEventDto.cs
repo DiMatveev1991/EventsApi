@@ -1,4 +1,4 @@
-﻿namespace EventsApi.DTOs
+namespace EventsApi.DTOs
 {
     public class UpdateEventDto : EventWriteDto { }
 }

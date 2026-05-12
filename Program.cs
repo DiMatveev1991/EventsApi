@@ -1,3 +1,5 @@
+using EventsApi.BackgroundServices;
+using EventsApi.DataAccess;
 using EventsApi.Middleware;
 using EventsApi.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -7,6 +9,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Сервисы приложения
 builder.Services.AddSingleton<IEventService, EventService>();
+
+// Бронирования: хранилище + сервис (Singleton, т. к. данные in-memory).
+builder.Services.AddSingleton<IBookingStore, InMemoryBookingStore>();
+builder.Services.AddSingleton<IBookingService, BookingService>();
+
+// Фоновая обработка Pending-броней.
+builder.Services.AddHostedService<BookingProcessor>();
 
 builder.Services.AddControllers();
 
