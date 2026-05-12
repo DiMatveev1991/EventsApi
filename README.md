@@ -6,7 +6,16 @@ REST API для управления мероприятиями, построе�
 
 ### Требования
 
-- .NET 9 SDK (работает и на .NET 8, достаточно сменить `TargetFramework`)
+- **.NET 9 SDK** (обязательно). Проект использует `TargetFramework=net9.0` во всех трёх csproj
+  (`EventsApi`, `EventsApi.DTOs`, `EventsApi.Tests`). На .NET 8 SDK сборка не пройдёт.
+
+  Проверить установленную версию:
+
+  ```bash
+  dotnet --list-sdks
+  ```
+
+  Скачать .NET 9 SDK можно с официального сайта Microsoft: <https://dotnet.microsoft.com/download/dotnet/9.0>
 
 ### Запуск
 
@@ -114,6 +123,9 @@ EventsApi/
 | `Confirmed`  | Бронь подтверждена                                      |
 | `Rejected`   | Бронь отклонена (например, событие было удалено)        |
 
+> В JSON-ответах API статусы сериализуются строкой (`"Pending"`, `"Confirmed"`, `"Rejected"`)
+> благодаря `JsonStringEnumConverter`. То же видно в Swagger UI.
+
 ### Эндпоинты — события
 
 #### `GET /events` — список с фильтрацией и пагинацией
@@ -160,7 +172,7 @@ Content-Type: application/json
 {
   "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "eventId": "11111111-2222-3333-4444-555555555555",
-  "status": 0,
+  "status": "Pending",
   "createdAt": "2025-09-15T12:00:00Z",
   "processedAt": null
 }
@@ -180,7 +192,7 @@ Content-Type: application/json
 {
   "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "eventId": "11111111-2222-3333-4444-555555555555",
-  "status": 1,
+  "status": "Confirmed",
   "createdAt": "2025-09-15T12:00:00Z",
   "processedAt": "2025-09-15T12:00:02Z"
 }
@@ -201,7 +213,17 @@ Content-Type: application/json
 
 Сервис корректно реагирует на отмену (`CancellationToken`): на остановке хоста все запущенные задачи прерываются. Все ошибки логируются (`ILogger<BookingProcessor>`), но не приводят к падению сервиса.
 
+### Известные ограничения
+
+- **Гонка между проверкой события и сменой статуса.** Между вызовом `IEventService.GetById`
+  и `booking.Confirm(...)` событие теоретически может быть удалено другим запросом —
+  тогда бронь подтвердится для уже несуществующего события. Для in-memory-хранилища и
+  текущего ТЗ это приемлемо; в реальной системе проверку и установку статуса следует
+  выполнять в одной транзакции/локе на уровне БД.
+
 ## Пример сценария использования
+
+### Сценарий 1. Pending → Confirmed
 
 ```bash
 # 1. Создаём событие
@@ -219,18 +241,37 @@ curl -X POST http://localhost:5134/events \
 curl -i -X POST http://localhost:5134/events/<event-id>/book
 # → 202 Accepted
 #   Location: /bookings/<booking-id>
-#   В теле бронь со status=0 (Pending)
+#   В теле бронь со status="Pending"
 
 # 3. Сразу проверяем статус
 curl http://localhost:5134/bookings/<booking-id>
-# → 200 OK, status=0 (Pending)
+# → 200 OK, status="Pending"
 
 # 4. Ждём ~3 секунды и повторяем запрос
 sleep 3 && curl http://localhost:5134/bookings/<booking-id>
-# → 200 OK, status=1 (Confirmed), processedAt заполнено
+# → 200 OK, status="Confirmed", processedAt заполнено
 ```
 
-Для сценария Rejected — создайте бронь и сразу удалите событие через `DELETE /events/{id}`; фоновый сервис увидит, что события больше нет, и отметит бронь как `Rejected`.
+### Сценарий 2. Pending → Rejected
+
+```bash
+# 1. Создаём событие
+curl -X POST http://localhost:5134/events \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "Будет удалено", "startAt": "2025-09-15T18:00:00", "endAt": "2025-09-15T20:00:00" }'
+
+# 2. Создаём бронь
+curl -i -X POST http://localhost:5134/events/<event-id>/book
+# → 202 Accepted, status="Pending"
+
+# 3. Сразу удаляем событие
+curl -X DELETE http://localhost:5134/events/<event-id>
+# → 204 No Content
+
+# 4. Ждём ~3 секунды
+sleep 3 && curl http://localhost:5134/bookings/<booking-id>
+# → 200 OK, status="Rejected", processedAt заполнено
+```
 
 ## Формат ошибок
 

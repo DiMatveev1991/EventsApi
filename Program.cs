@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using EventsApi.BackgroundServices;
 using EventsApi.DataAccess;
 using EventsApi.Middleware;
@@ -17,49 +18,59 @@ builder.Services.AddSingleton<IBookingService, BookingService>();
 // Фоновая обработка Pending-броней.
 builder.Services.AddHostedService<BookingProcessor>();
 
-builder.Services.AddControllers();
+builder.Services
+	.AddControllers()
+	.AddJsonOptions(opts =>
+	{
+		// BookingStatus и другие enum-ы сериализуем строкой ("Pending"/"Confirmed"/"Rejected"),
+		// а не числом — читаемее и в Swagger, и в ответах API.
+		opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+	});
 
 // Возвращаем ModelState-ошибки валидации в том же формате ProblemDetails,
 // что и наш middleware — единообразный ответ при 400.
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
-    options.InvalidModelStateResponseFactory = context =>
-    {
-        var errors = context.ModelState
-            .Where(kvp => kvp.Value is { Errors.Count: > 0 })
-            .ToDictionary(
-                kvp => kvp.Key,
-                kvp => kvp.Value!.Errors.Select(e => e.ErrorMessage).ToArray());
+	options.InvalidModelStateResponseFactory = context =>
+	{
+		var errors = context.ModelState
+			.Where(kvp => kvp.Value is { Errors.Count: > 0 })
+			.ToDictionary(
+				kvp => kvp.Key,
+				kvp => kvp.Value!.Errors.Select(e => e.ErrorMessage).ToArray());
 
-        var problem = new ValidationProblemDetails(errors)
-        {
-            Status = StatusCodes.Status400BadRequest,
-            Title = "Ошибка валидации",
-            Detail = "Один или несколько параметров запроса некорректны",
-            Instance = context.HttpContext.Request.Path
-        };
+		var problem = new ValidationProblemDetails(errors)
+		{
+			Status = StatusCodes.Status400BadRequest,
+			Title = "Ошибка валидации",
+			Detail = "Один или несколько параметров запроса некорректны",
+			Instance = context.HttpContext.Request.Path
+		};
 
-        return new BadRequestObjectResult(problem)
-        {
-            ContentTypes = { "application/problem+json" }
-        };
-    };
+		return new BadRequestObjectResult(problem)
+		{
+			ContentTypes = { "application/problem+json" }
+		};
+	};
 });
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "EventsApi",
-        Version = "v1",
-        Description = "REST API для управления мероприятиями"
-    });
+	c.SwaggerDoc("v1", new OpenApiInfo
+	{
+		Title = "EventsApi",
+		Version = "v1",
+		Description = "REST API для управления мероприятиями"
+	});
 
-    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-    if (File.Exists(xmlPath))
-        c.IncludeXmlComments(xmlPath);
+	// Чтобы Swagger показывал enum-ы строками, согласованно с сериализатором.
+	c.UseInlineDefinitionsForEnums();
+
+	var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+	var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+	if (File.Exists(xmlPath))
+		c.IncludeXmlComments(xmlPath);
 });
 
 var app = builder.Build();
@@ -69,8 +80,8 @@ app.UseGlobalExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+	app.UseSwagger();
+	app.UseSwaggerUI();
 }
 
 app.MapControllers();
