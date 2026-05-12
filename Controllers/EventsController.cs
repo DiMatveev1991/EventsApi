@@ -1,5 +1,3 @@
-﻿
-
 using EventsApi.DTOs;
 using EventsApi.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -18,31 +16,33 @@ namespace EventsApi.Controllers
             _eventService = eventService;
         }
 
-        /// <summary>Получить список всех мероприятий</summary>
+        /// <summary>
+        /// Получить список мероприятий с фильтрацией и пагинацией.
+        /// </summary>
+        /// <param name="query">Параметры фильтрации (title, from, to) и пагинации (page, pageSize).</param>
         [HttpGet]
-        [ProducesResponseType(typeof(IReadOnlyList<EventDto>), StatusCodes.Status200OK)]
-        public ActionResult<IReadOnlyList<EventDto>> GetAll()
+        [ProducesResponseType(typeof(PaginatedResult<EventDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+        public ActionResult<PaginatedResult<EventDto>> GetAll([FromQuery] EventQueryParameters query)
         {
-            return Ok(_eventService.GetAll());
+            var result = _eventService.GetAll(query);
+            return Ok(result);
         }
 
         /// <summary>Получить мероприятие по ID</summary>
         [HttpGet("{id:guid}")]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
         public ActionResult<EventDto> GetById(Guid id)
         {
             var ev = _eventService.GetById(id);
-            if (ev is null)
-                return NotFound(new { message = $"Мероприятие с ID {id} не найдено" });
-
             return Ok(ev);
         }
 
         /// <summary>Создать новое мероприятие</summary>
         [HttpPost]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status201Created)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
         public ActionResult<EventDto> Create([FromBody] CreateEventDto dto)
         {
             var created = _eventService.Create(dto);
@@ -52,27 +52,21 @@ namespace EventsApi.Controllers
         /// <summary>Обновить мероприятие целиком</summary>
         [HttpPut("{id:guid}")]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
         public ActionResult<EventDto> Update(Guid id, [FromBody] UpdateEventDto dto)
         {
             var updated = _eventService.Update(id, dto);
-            if (updated is null)
-                return NotFound(new { message = $"Мероприятие с ID {id} не найдено" });
-
             return Ok(updated);
         }
 
         /// <summary>Удалить мероприятие</summary>
         [HttpDelete("{id:guid}")]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
         public IActionResult Delete(Guid id)
         {
-            var deleted = _eventService.Delete(id);
-            if (!deleted)
-                return NotFound(new { message = $"Мероприятие с ID {id} не найдено" });
-
+            _eventService.Delete(id);
             return NoContent();
         }
     }
