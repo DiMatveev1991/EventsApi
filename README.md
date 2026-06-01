@@ -6,19 +6,24 @@ REST API для управления мероприятиями, построе�
 
 ### Требования
 
-- .NET 9 SDK (работает и на .NET 8, достаточно сменить `TargetFramework`)
+- **.NET 9 SDK** (обязательно). Проект использует `TargetFramework=net9.0` во всех трёх csproj
+  (`EventsApi`, `EventsApi.DTOs`, `EventsApi.Tests`). На .NET 8 SDK сборка не пройдёт.
+
+  Проверить установленную версию:
+
+  ```bash
+  dotnet --list-sdks
+  ```
+
+  Скачать .NET 9 SDK можно с официального сайта Microsoft: <https://dotnet.microsoft.com/download/dotnet/9.0>
 
 ### Запуск
 
 ```bash
-# Клонировать репозиторий
 git clone <URL репозитория>
 cd EventsApi
 
-# Собрать проект
 dotnet build
-
-# Запустить API
 dotnet run --project EventsApi.csproj
 ```
 
@@ -34,11 +39,10 @@ dotnet run --project EventsApi.csproj
 ### Запуск тестов
 
 ```bash
-# Из корня репозитория
 dotnet test
 ```
 
-При необходимости можно запустить только тестовый проект:
+При необходимости — только тестовый проект:
 
 ```bash
 dotnet test EventsApi.Tests/EventsApi.Tests.csproj
@@ -49,27 +53,42 @@ dotnet test EventsApi.Tests/EventsApi.Tests.csproj
 ```
 EventsApi/
 ├── Controllers/
-│   └── EventsController.cs            # Эндпоинты API
+│   ├── EventsController.cs            # Эндпоинты по событиям + POST /events/{id}/book
+│   └── BookingsController.cs          # Эндпоинты по бронированиям
+├── BackgroundServices/
+│   └── BookingProcessor.cs            # Фоновая обработка Pending-броней
+├── DataAccess/
+│   ├── IBookingStore.cs
+│   └── InMemoryBookingStore.cs        # In-memory хранилище бронирований
 ├── EventsApi.DTOs/
-│   ├── DTOs/CreateEventDto.cs         # DTO создания
-│   ├── DTOs/UpdateEventDto.cs         # DTO обновления
-│   ├── DTOs/EventDto.cs               # DTO ответа
-│   ├── DTOs/EventQueryParameters.cs   # Параметры фильтрации и пагинации
-│   └── DTOs/PaginatedResult.cs        # Обёртка для страничных ответов
+│   ├── DTOs/CreateEventDto.cs
+│   ├── DTOs/UpdateEventDto.cs
+│   ├── DTOs/EventDto.cs
+│   ├── DTOs/EventQueryParameters.cs
+│   ├── DTOs/PaginatedResult.cs
+│   ├── DTOs/BookingDto.cs
+│   └── DTOs/BookingStatus.cs
 ├── Exceptions/
 │   └── AppException.cs                # NotFoundException, ValidationException
 ├── Middleware/
 │   └── ExceptionHandlingMiddleware.cs # Глобальный обработчик ошибок
 ├── Models/
-│   └── Event.cs                       # Доменная модель
+│   ├── Event.cs
+│   └── Booking.cs
 ├── Services/
 │   ├── IEventService.cs
-│   └── EventService.cs                # LINQ-фильтрация и пагинация
+│   ├── EventService.cs
+│   ├── IBookingService.cs
+│   └── BookingService.cs
 ├── EventsApi.Tests/                   # xUnit + FluentAssertions
 │   ├── EventServiceCrudTests.cs
 │   ├── EventServiceFilteringTests.cs
 │   ├── EventServicePaginationTests.cs
-│   └── EventServiceValidationTests.cs
+│   ├── EventServiceValidationTests.cs
+│   ├── BookingEntityTests.cs
+│   ├── InMemoryBookingStoreTests.cs
+│   ├── BookingServiceTests.cs
+│   └── BookingProcessorTests.cs
 ├── Program.cs
 └── EventsApi.csproj
 ```
@@ -82,13 +101,34 @@ EventsApi/
 |---------------|------------|:------------:|---------------------------|
 | `id`          | `guid`     | —            | Уникальный идентификатор  |
 | `title`       | `string`   | да           | Название мероприятия      |
-| `description` | `string?`  | нет          | Описание (может быть null)|
+| `description` | `string?`  | нет          | Описание                  |
 | `startAt`     | `datetime` | да           | Дата и время начала       |
-| `endAt`       | `datetime` | нет          | Дата и время окончания    |
+| `endAt`       | `datetime` | да           | Дата и время окончания    |
 
-### Эндпоинты
+### Модель брони
 
-#### `GET /events` — список мероприятий с фильтрацией и пагинацией
+| Поле          | Тип             | Обязательное | Описание                                                |
+|---------------|-----------------|:------------:|---------------------------------------------------------|
+| `id`          | `guid`          | —            | Уникальный идентификатор брони                          |
+| `eventId`     | `guid`          | да           | Идентификатор события                                   |
+| `status`      | `BookingStatus` | да           | Текущий статус (`Pending`/`Confirmed`/`Rejected`)       |
+| `createdAt`   | `datetime`      | да           | Время создания брони (UTC)                              |
+| `processedAt` | `datetime?`     | нет          | Время обработки фоновым сервисом (UTC)                  |
+
+**Статусы (`BookingStatus`):**
+
+| Значение     | Описание                                                |
+|--------------|---------------------------------------------------------|
+| `Pending`    | Бронь создана, ожидает обработки фоновым сервисом       |
+| `Confirmed`  | Бронь подтверждена                                      |
+| `Rejected`   | Бронь отклонена (например, событие было удалено)        |
+
+> В JSON-ответах API статусы сериализуются строкой (`"Pending"`, `"Confirmed"`, `"Rejected"`)
+> благодаря `JsonStringEnumConverter`. То же видно в Swagger UI.
+
+### Эндпоинты — события
+
+#### `GET /events` — список с фильтрацией и пагинацией
 
 **Query-параметры:**
 
@@ -100,83 +140,155 @@ EventsApi/
 | `page`     | `int`      | `1`          | Номер страницы (нумерация с 1)                             |
 | `pageSize` | `int`      | `10`         | Количество элементов на странице                           |
 
-Все фильтры комбинируются логическим И.
-
-**Пример запроса:**
-
-```
-GET /events?title=митап&from=2025-07-01&to=2025-08-31&page=1&pageSize=5
-```
-
-**Ответ `200 OK`:**
-
-```json
-{
-  "totalCount": 2,
-  "page": 1,
-  "pageSize": 5,
-  "items": [
-    {
-      "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-      "title": "C# Митап",
-      "description": "Обсуждаем новинки .NET",
-      "startAt": "2025-07-15T18:00:00",
-      "endAt":   "2025-07-15T20:00:00"
-    },
-    {
-      "id": "4b2e1c88-9f6a-4c12-aab4-1a2b3c4d5e6f",
-      "title": "JS Митап",
-      "description": null,
-      "startAt": "2025-08-20T18:00:00",
-      "endAt":   "2025-08-20T20:00:00"
-    }
-  ]
-}
-```
-
 #### `GET /events/{id}` — мероприятие по ID
 
-- `200 OK` — найдено
-- `404 Not Found` — не найдено (см. формат ошибки ниже)
+- `200 OK` / `404 Not Found`
 
 #### `POST /events` — создание
 
-Тело запроса:
-
-```json
-{
-  "title": "Митап по C#",
-  "description": "Обсуждаем новинки .NET 9",
-  "startAt": "2025-09-15T18:00:00",
-  "endAt":   "2025-09-15T20:00:00"
-}
-```
-
-- `201 Created` — создано, в теле созданный объект
-- `400 Bad Request` — ошибки валидации
-
-Правила валидации:
-
-- `title` — обязательное, не пустое
-- `startAt`, `endAt` — обязательные
-- `endAt` должно быть строго позже `startAt`
+- `201 Created` / `400 Bad Request`
 
 #### `PUT /events/{id}` — полное обновление
 
-- `200 OK` — обновлено
-- `400 Bad Request` — ошибки валидации
-- `404 Not Found` — не найдено
+- `200 OK` / `400 Bad Request` / `404 Not Found`
 
 #### `DELETE /events/{id}`
 
-- `204 No Content` — удалено
-- `404 Not Found` — не найдено
+- `204 No Content` / `404 Not Found`
+
+### Эндпоинты — бронирования
+
+#### `POST /events/{id}/book` — создать бронь
+
+Создаёт бронь для указанного события. Реализует паттерн «**быстрый ответ + отложенная обработка**»: эндпоинт мгновенно возвращает созданную бронь в статусе `Pending`, а её обработка выполняется фоновым сервисом.
+
+**Ответ `202 Accepted`:**
+
+```http
+HTTP/1.1 202 Accepted
+Location: /bookings/3fa85f64-5717-4562-b3fc-2c963f66afa6
+Content-Type: application/json
+
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "eventId": "11111111-2222-3333-4444-555555555555",
+  "status": "Pending",
+  "createdAt": "2025-09-15T12:00:00Z",
+  "processedAt": null
+}
+```
+
+- `202 Accepted` — бронь принята в обработку, заголовок `Location` указывает на ресурс брони
+- `404 Not Found` — событие с указанным `id` не существует
+
+#### `GET /bookings/{id}` — получить текущее состояние брони
+
+- `200 OK` — возвращает актуальную информацию о брони (включая текущий `status` и `processedAt`)
+- `404 Not Found` — бронь не найдена
+
+**Пример ответа после обработки:**
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "eventId": "11111111-2222-3333-4444-555555555555",
+  "status": "Confirmed",
+  "createdAt": "2025-09-15T12:00:00Z",
+  "processedAt": "2025-09-15T12:00:02Z"
+}
+```
+
+## Фоновая обработка бронирований
+
+За обработку бронирований отвечает класс `BookingProcessor` — `BackgroundService`, регистрируемый через `AddHostedService`.
+
+**Алгоритм работы:**
+
+1. Каждые `500 мс` сервис опрашивает `IBookingStore` и забирает брони в статусе `Pending`.
+2. Для каждой такой брони выполняется `Task.Delay(2 сек)` — имитация обращения к внешней системе.
+3. После «обработки» проверяется, существует ли ещё событие, к которому относится бронь:
+   - событие найдено → бронь переводится в `Confirmed`;
+   - событие удалено → бронь переводится в `Rejected`.
+4. Заполняется поле `ProcessedAt` (UTC), бронь сохраняется в хранилище.
+
+Сервис корректно реагирует на отмену (`CancellationToken`): на остановке хоста все запущенные задачи прерываются. Все ошибки логируются (`ILogger<BookingProcessor>`), но не приводят к падению сервиса.
+
+### Известные ограничения
+
+- **Гонка между проверкой события и сменой статуса.** Между вызовом `IEventService.GetById`
+  и `booking.Confirm(...)` событие теоретически может быть удалено другим запросом —
+  тогда бронь подтвердится для уже несуществующего события. Для in-memory-хранилища и
+  текущего ТЗ это приемлемо; в реальной системе проверку и установку статуса следует
+  выполнять в одной транзакции/локе на уровне БД.
+
+## Пример сценария использования
+
+### Сценарий 1. Pending → Confirmed
+
+```bash
+# 1. Создаём событие
+curl -X POST http://localhost:5134/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Митап по C#",
+    "description": "Обсуждаем .NET 9",
+    "startAt": "2025-09-15T18:00:00",
+    "endAt":   "2025-09-15T20:00:00"
+  }'
+# → 201 Created, в теле объект события с id
+
+# 2. Создаём бронь
+curl -i -X POST http://localhost:5134/events/<event-id>/book
+# → 202 Accepted
+#   Location: /bookings/<booking-id>
+#   В теле бронь со status="Pending"
+
+# 3. Сразу проверяем статус
+curl http://localhost:5134/bookings/<booking-id>
+# → 200 OK, status="Pending"
+
+# 4. Ждём ~3 секунды и повторяем запрос
+sleep 3 && curl http://localhost:5134/bookings/<booking-id>
+# → 200 OK, status="Confirmed", processedAt заполнено
+```
+
+### Сценарий 2. Pending → Rejected
+
+```bash
+# 1. Создаём событие
+curl -X POST http://localhost:5134/events \
+  -H "Content-Type: application/json" \
+  -d '{ "title": "Будет удалено", "startAt": "2025-09-15T18:00:00", "endAt": "2025-09-15T20:00:00" }'
+
+# 2. Создаём бронь
+curl -i -X POST http://localhost:5134/events/<event-id>/book
+# → 202 Accepted, status="Pending"
+
+# 3. Сразу удаляем событие
+curl -X DELETE http://localhost:5134/events/<event-id>
+# → 204 No Content
+
+# 4. Ждём ~3 секунды
+sleep 3 && curl http://localhost:5134/bookings/<booking-id>
+# → 200 OK, status="Rejected", processedAt заполнено
+```
 
 ## Формат ошибок
 
-Все ошибки возвращаются в едином формате **Problem Details (RFC 7807)** с `Content-Type: application/problem+json`.
+Все ошибки возвращаются в формате **Problem Details (RFC 7807)** с `Content-Type: application/problem+json`.
 
-**Пример `400 Bad Request` (валидация):**
+**Пример `404 Not Found`:**
+
+```json
+{
+  "status": 404,
+  "title": "Ресурс не найден",
+  "detail": "Бронь с ID 3fa85f64-5717-4562-b3fc-2c963f66afa6 не найдена",
+  "instance": "/bookings/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+}
+```
+
+**Пример `400 Bad Request` (валидация события):**
 
 ```json
 {
@@ -191,46 +303,20 @@ GET /events?title=митап&from=2025-07-01&to=2025-08-31&page=1&pageSize=5
 }
 ```
 
-**Пример `404 Not Found`:**
-
-```json
-{
-  "status": 404,
-  "title": "Ресурс не найден",
-  "detail": "Мероприятие с ID 3fa85f64-5717-4562-b3fc-2c963f66afa6 не найдено",
-  "instance": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6"
-}
-```
-
-**Пример `500 Internal Server Error`:**
-
-```json
-{
-  "status": 500,
-  "title": "Внутренняя ошибка сервера",
-  "detail": "Произошла непредвиденная ошибка. Повторите попытку позже.",
-  "instance": "/events"
-}
-```
-
-В режиме `Development` для 500-ответов дополнительно добавляется поле `trace` с трассировкой стека.
-
 ## Тестирование
 
-- Фреймворк — **xUnit**
-- Библиотека утверждений — **FluentAssertions**
-- Тесты следуют паттерну **Arrange–Act–Assert**
+- xUnit + FluentAssertions, паттерн AAA.
 
-Покрыто:
+**Что покрыто:**
 
-- Успешные сценарии CRUD (`Create`, `GetAll`, `GetById`, `Update`, `Delete`)
-- Фильтрация по `title` (регистронезависимая), `from`, `to`, их комбинации
-- Пагинация (граничные страницы, нормализация отрицательных значений, пустые страницы)
-- Неуспешные сценарии: несуществующий ID, `EndAt ≤ StartAt`, пустой `Title`, `null` DTO
-- Граничные случаи для дат фильтра (инклюзивные границы `from`/`to`)
+- `EventService`: CRUD, фильтрация (`title`, `from`, `to`, комбинации), пагинация, валидация
+- **Сущность `Booking`**: `CreatePending`, переходы `Confirm`/`Reject`, защита от повторных переходов
+- **`InMemoryBookingStore`**: Add/Get/Update, фильтр Pending, дубликаты, неизвестные Id
+- **`BookingService`**: создание для существующего/удалённого/несуществующего события, несколько броней с уникальными Id, чтение по Id, отражение смены статуса (Confirm/Reject)
+- **`BookingProcessor`**: Pending → Confirmed, Pending → Rejected при удалённом событии, обработка нескольких броней, корректная отмена через `StopAsync`, отсутствие активности на пустом сторе
 
 ## Примечания
 
-- Данные хранятся в памяти (singleton) и сбрасываются при перезапуске.
-- Все даты принимаются и возвращаются в формате ISO 8601 (`2025-09-15T18:00:00`).
-- Логирование ошибок выполняется встроенным `ILogger`: клиентские ошибки (4xx) — `Warning`, серверные (5xx) — `Error`.
+- Данные событий и бронирований хранятся в памяти (Singleton) и сбрасываются при перезапуске.
+- Все даты бронирований фиксируются в UTC.
+- Период опроса фонового сервиса — 500 мс, имитация задержки внешнего вызова — 2 с.

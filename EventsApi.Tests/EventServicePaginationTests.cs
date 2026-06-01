@@ -101,15 +101,13 @@ public class EventServicePaginationTests
     [Fact]
     public void Pagination_WithFilter_TotalCountReflectsFilteredSet()
     {
-        // Отфильтруем только половину (Event 01..Event 09 + Event 10..Event 25 → 25 штук содержат "Event")
-        // Возьмём фильтр по диапазону, оставляющий только первые 5
+        // До фильтра 25, после — 5 (дни 2..6); страница 1 размером 3 → 3 элемента.
         var result = _sut.GetAll(TestData.Query(
             from: new DateTime(2025, 01, 02),
             to:   new DateTime(2025, 01, 06, 23, 59, 59),
             page: 1,
             pageSize: 3));
 
-        // До фильтра 25, после — 5 (дни 2..6); страница 1 размером 3 → 3 элемента.
         result.TotalCount.Should().Be(5);
         result.Items.Should().HaveCount(3);
     }

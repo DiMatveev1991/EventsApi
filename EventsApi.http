@@ -54,3 +54,17 @@ Content-Type: application/json
 
 ### Удалить событие (заменить GUID)
 DELETE {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+
+### Создать бронь для события (заменить GUID события)
+POST {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000/book
+
+### Создать бронь для несуществующего события → 404
+POST {{EventsApi_HostAddress}}/events/ffffffff-ffff-ffff-ffff-ffffffffffff/book
+
+### Получить статус брони (заменить GUID брони)
+GET {{EventsApi_HostAddress}}/bookings/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Бронь по несуществующему ID → 404
+GET {{EventsApi_HostAddress}}/bookings/ffffffff-ffff-ffff-ffff-ffffffffffff
+Accept: application/json

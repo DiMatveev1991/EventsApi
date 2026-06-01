@@ -62,7 +62,6 @@ namespace EventsApi.Middleware
             if (errors is not null)
                 problem.Extensions["errors"] = errors;
 
-            // В Development полезно видеть трассировку. В Production — только сообщение.
             if (_env.IsDevelopment() && statusCode >= 500)
                 problem.Extensions["trace"] = exception.ToString();
 

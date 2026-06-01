@@ -10,10 +10,12 @@ namespace EventsApi.Controllers
     public class EventsController : ControllerBase
     {
         private readonly IEventService _eventService;
+        private readonly IBookingService _bookingService;
 
-        public EventsController(IEventService eventService)
+        public EventsController(IEventService eventService, IBookingService bookingService)
         {
             _eventService = eventService;
+            _bookingService = bookingService;
         }
 
         /// <summary>
@@ -68,6 +70,26 @@ namespace EventsApi.Controllers
         {
             _eventService.Delete(id);
             return NoContent();
+        }
+
+        /// <summary>
+        /// Создать бронь для мероприятия. Возвращает 202 Accepted сразу;
+        /// статус брони обновляется фоновым сервисом.
+        /// </summary>
+        [HttpPost("{id:guid}/book")]
+        [ProducesResponseType(typeof(BookingDto), StatusCodes.Status202Accepted)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+        public async Task<ActionResult<BookingDto>> Book(Guid id, CancellationToken cancellationToken)
+        {
+            var booking = await _bookingService.CreateBookingAsync(id, cancellationToken);
+
+            var locationUri = Url.Action(
+                action: nameof(BookingsController.GetById),
+                controller: "Bookings",
+                values: new { id = booking.Id }) ?? $"/bookings/{booking.Id}";
+
+            // 202 Accepted + заголовок Location на ресурс брони + тело с информацией о брони.
+            return Accepted(locationUri, booking);
         }
     }
 }
