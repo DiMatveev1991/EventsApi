@@ -5,44 +5,63 @@ using EventsApi.Models;
 
 namespace EventsApi.Services
 {
-    public class BookingService : IBookingService
-    {
-        private readonly IBookingStore _bookingStore;
-        private readonly IEventService _eventService;
+	public class BookingService : IBookingService
+	{
+		private readonly IBookingStore _bookingStore;
+		private readonly IEventStore _eventStore;
 
-        public BookingService(IBookingStore bookingStore, IEventService eventService)
-        {
-            _bookingStore = bookingStore;
-            _eventService = eventService;
-        }
+		// Защищает критическую секцию «проверка доступных мест + создание брони».
+		private readonly object _bookingLock = new();
 
-        public Task<BookingDto> CreateBookingAsync(Guid eventId, CancellationToken cancellationToken = default)
-        {
-            // Проверяем, что событие существует. IEventService.GetById сам кидает
-            // NotFoundException — это нас полностью устраивает: контроллер вернёт 404.
-            _ = _eventService.GetById(eventId);
+		public BookingService(IBookingStore bookingStore, IEventStore eventStore)
+		{
+			_bookingStore = bookingStore;
+			_eventStore = eventStore;
+		}
 
-            var booking = Booking.CreatePending(eventId);
-            _bookingStore.Add(booking);
+		public Task<BookingDto> CreateBookingAsync(Guid eventId, CancellationToken cancellationToken = default)
+		{
+			// Атомарная пара «проверка + изменение»: без lock два потока могут
+			// одновременно увидеть AvailableSeats > 0 и создать брони сверх лимита
+			// (овербукинг). lock гарантирует, что через секцию проходит один поток.
+			lock (_bookingLock)
+			{
+				// 1. Получение события из хранилища.
+				var ev = _eventStore.GetById(eventId)
+					?? throw NotFoundException.ForEvent(eventId);
 
-            return Task.FromResult(MapToDto(booking));
-        }
+				// 2. Проверка доступных мест.
+				if (!ev.TryReserveSeats())
+					throw new NoAvailableSeatsException();
 
-        public Task<BookingDto> GetBookingByIdAsync(Guid bookingId, CancellationToken cancellationToken = default)
-        {
-            var booking = _bookingStore.GetById(bookingId)
-                ?? throw NotFoundException.ForBooking(bookingId);
+				// 3. Сохранение обновлённого события.
+				_eventStore.Update(ev);
 
-            return Task.FromResult(MapToDto(booking));
-        }
+				// 4. Создание и сохранение брони.
+				var booking = Booking.CreatePending(eventId);
+				_bookingStore.Add(booking);
 
-        internal static BookingDto MapToDto(Booking booking) => new()
-        {
-            Id = booking.Id,
-            EventId = booking.EventId,
-            Status = booking.Status,
-            CreatedAt = booking.CreatedAt,
-            ProcessedAt = booking.ProcessedAt
-        };
-    }
+				return Task.FromResult(MapToDto(booking));
+			}
+		}
+
+		public Task<BookingDto> GetBookingByIdAsync(Guid bookingId, CancellationToken cancellationToken = default)
+		{
+			// Операция чтения — блокировка не нужна, lock охватывает только
+			// минимально необходимую критическую секцию в CreateBookingAsync.
+			var booking = _bookingStore.GetById(bookingId)
+				?? throw NotFoundException.ForBooking(bookingId);
+
+			return Task.FromResult(MapToDto(booking));
+		}
+
+		internal static BookingDto MapToDto(Booking booking) => new()
+		{
+			Id = booking.Id,
+			EventId = booking.EventId,
+			Status = booking.Status,
+			CreatedAt = booking.CreatedAt,
+			ProcessedAt = booking.ProcessedAt
+		};
+	}
 }

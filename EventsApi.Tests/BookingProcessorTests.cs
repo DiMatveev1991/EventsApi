@@ -20,9 +20,10 @@ public class BookingProcessorTests
 	private static (IEventService events, IBookingStore store, BookingProcessor processor)
 		BuildSut()
 	{
-		IEventService events = new EventService();
+		IEventStore eventStore = new InMemoryEventStore();
+		IEventService events = new EventService(eventStore);
 		IBookingStore store = new InMemoryBookingStore();
-		var processor = new BookingProcessor(store, events, NullLogger<BookingProcessor>.Instance);
+		var processor = new BookingProcessor(store, eventStore, NullLogger<BookingProcessor>.Instance);
 		return (events, store, processor);
 	}
 
@@ -85,7 +86,7 @@ public class BookingProcessorTests
 	}
 
 	[Fact]
-	public async Task ProcessesMultiplePendingBookings()
+	public async Task ProcessesMultiplePendingBookings_InParallel()
 	{
 		// Arrange
 		var (events, store, processor) = BuildSut();
@@ -99,21 +100,26 @@ public class BookingProcessorTests
 		store.Add(b3);
 
 		// Act
+		var started = DateTime.UtcNow;
 		await processor.StartAsync(CancellationToken.None);
 
-		// Все три брони должны быть обработаны (по 2 сек каждая).
 		var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
 		while (DateTime.UtcNow < deadline)
 		{
 			if (store.GetPending().Count == 0) break;
 			await Task.Delay(200);
 		}
+		var elapsed = DateTime.UtcNow - started;
 
 		await processor.StopAsync(CancellationToken.None);
 
 		// Assert
 		store.GetPending().Should().BeEmpty();
 		store.GetAll().Should().OnlyContain(b => b.Status == BookingStatus.Confirmed);
+
+		// Задержки выполняются параллельно: 3 брони по 2 сек обрабатываются
+		// значительно быстрее, чем 6 сек последовательной обработки.
+		elapsed.Should().BeLessThan(TimeSpan.FromSeconds(6));
 	}
 
 	[Fact]

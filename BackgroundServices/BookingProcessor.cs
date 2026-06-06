@@ -1,43 +1,42 @@
 using EventsApi.DataAccess;
 using EventsApi.DTOs;
-using EventsApi.Exceptions;
-using EventsApi.Services;
+using EventsApi.Models;
 
 namespace EventsApi.BackgroundServices
 {
 	/// <summary>
 	/// Фоновый сервис, периодически забирающий из хранилища брони в статусе Pending
-	/// и переводящий их в Confirmed (или Rejected, если событие к моменту обработки
-	/// уже удалено).
+	/// и обрабатывающий их параллельно: бронь переводится в Confirmed, либо в Rejected,
+	/// если событие к моменту обработки уже удалено или произошла непредвиденная ошибка.
 	/// </summary>
 	/// <remarks>
 	/// Имитирует обращение к внешней системе через <see cref="Task.Delay(TimeSpan, CancellationToken)"/>.
-	/// Корректно реагирует на отмену через <see cref="CancellationToken"/>.
-	/// <para>
-	/// Known limitation: между проверкой существования события и установкой статуса
-	/// событие теоретически может быть удалено другим потоком. Для in-memory-хранилища
-	/// и текущего ТЗ это приемлемо; в реальной системе проверку и смену статуса
-	/// следует выполнять в одной транзакции/локе.
-	/// </para>
+	/// Задержки выполняются параллельно (до захвата семафора), а секция
+	/// «проверка события + смена статуса + запись в хранилища» защищена
+	/// <see cref="SemaphoreSlim"/> — асинхронным аналогом мьютекса. Обычный lock
+	/// здесь не подходит: внутри защищаемой секции есть await.
 	/// </remarks>
 	public class BookingProcessor : BackgroundService
 	{
-		// Имитация задержки внешнего вызова. Дефолт по ТЗ — 2 секунды.
-		private static readonly TimeSpan ExternalCallDelay = TimeSpan.FromSeconds(2);
-		// Период опроса хранилища между итерациями (когда Pending пуст).
-		private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
+		// Имитация задержки внешнего вызова.
+		private static readonly TimeSpan ProcessingDelay = TimeSpan.FromSeconds(2);
+		// Период опроса хранилища между итерациями.
+		private static readonly TimeSpan PollingInterval = TimeSpan.FromMilliseconds(500);
 
-		private readonly IBookingStore _store;
-		private readonly IEventService _eventService;
+		private readonly IBookingStore _bookingStore;
+		private readonly IEventStore _eventStore;
 		private readonly ILogger<BookingProcessor> _logger;
 
+		// Защищает запись в хранилища при параллельной обработке броней.
+		private readonly SemaphoreSlim _processingSemaphore = new(1, 1);
+
 		public BookingProcessor(
-			IBookingStore store,
-			IEventService eventService,
+			IBookingStore bookingStore,
+			IEventStore eventStore,
 			ILogger<BookingProcessor> logger)
 		{
-			_store = store;
-			_eventService = eventService;
+			_bookingStore = bookingStore;
+			_eventStore = eventStore;
 			_logger = logger;
 		}
 
@@ -58,12 +57,12 @@ namespace EventsApi.BackgroundServices
 				}
 				catch (Exception ex)
 				{
-					_logger.LogError(ex, "Ошибка при обработке брони в фоне");
+					_logger.LogError(ex, "Ошибка при обработке броней в фоне");
 				}
 
 				try
 				{
-					await Task.Delay(PollInterval, stoppingToken);
+					await Task.Delay(PollingInterval, stoppingToken);
 				}
 				catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
 				{
@@ -74,55 +73,105 @@ namespace EventsApi.BackgroundServices
 			_logger.LogInformation("BookingProcessor остановлен");
 		}
 
-		private async Task ProcessPendingBatchAsync(CancellationToken cancellationToken)
+		private async Task ProcessPendingBatchAsync(CancellationToken stoppingToken)
 		{
-			var pending = _store.GetPending();
-			if (pending.Count == 0)
+			var pendingBookings = _bookingStore.GetPending().ToList();
+			if (pendingBookings.Count == 0)
 				return;
 
-			foreach (var booking in pending)
-			{
-				cancellationToken.ThrowIfCancellationRequested();
-
-				_logger.LogInformation(
-					"Обработка брони {BookingId} для события {EventId}",
-					booking.Id, booking.EventId);
-
-				// Имитация обращения к внешней системе.
-				await Task.Delay(ExternalCallDelay, cancellationToken);
-
-				// Если бронь уже была кем-то обработана (например, повторный запуск),
-				// пропускаем её.
-				if (booking.Status != BookingStatus.Pending)
-					continue;
-
-				if (EventStillExists(_eventService, booking.EventId))
-				{
-					booking.Confirm(DateTime.UtcNow);
-					_logger.LogInformation("Бронь {BookingId} подтверждена", booking.Id);
-				}
-				else
-				{
-					booking.Reject(DateTime.UtcNow);
-					_logger.LogWarning(
-						"Бронь {BookingId} отклонена: событие {EventId} больше не существует",
-						booking.Id, booking.EventId);
-				}
-
-				_store.Update(booking);
-			}
+			// Параллельный запуск обработки всех Pending-броней.
+			var tasks = pendingBookings.Select(booking => ProcessBookingAsync(booking, stoppingToken));
+			await Task.WhenAll(tasks);
 		}
 
-		private static bool EventStillExists(IEventService eventService, Guid eventId)
+		private async Task ProcessBookingAsync(Booking booking, CancellationToken stoppingToken)
 		{
 			try
 			{
-				_ = eventService.GetById(eventId);
-				return true;
+				_logger.LogInformation(
+					"Начата обработка брони {BookingId} для события {EventId}",
+					booking.Id, booking.EventId);
+
+				// Имитация внешнего вызова ДО захвата семафора —
+				// задержки разных броней выполняются параллельно.
+				await Task.Delay(ProcessingDelay, stoppingToken);
+
+				// Семафор защищает секцию «проверка события + смена статуса + запись».
+				await _processingSemaphore.WaitAsync(stoppingToken);
+				try
+				{
+					// Бронь могла быть обработана ранее (например, повторный запуск).
+					if (booking.Status != BookingStatus.Pending)
+						return;
+
+					var ev = _eventStore.GetById(booking.EventId);
+					if (ev is null)
+					{
+						booking.Reject(DateTime.UtcNow);
+						_bookingStore.Update(booking);
+						_logger.LogWarning(
+							"Бронь {BookingId} отклонена: событие {EventId} больше не существует",
+							booking.Id, booking.EventId);
+						return;
+					}
+
+					booking.Confirm(DateTime.UtcNow);
+					_bookingStore.Update(booking);
+					_logger.LogInformation("Бронь {BookingId} подтверждена", booking.Id);
+				}
+				finally
+				{
+					_processingSemaphore.Release();
+				}
 			}
-			catch (NotFoundException)
+			catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
 			{
-				return false;
+				// Штатная остановка: бронь остаётся Pending и будет
+				// обработана после перезапуска сервиса.
+				_logger.LogInformation(
+					"Обработка брони {BookingId} прервана остановкой сервиса", booking.Id);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex,
+					"Непредвиденная ошибка при обработке брони {BookingId}", booking.Id);
+				await RejectAndReleaseSeatAsync(booking);
+			}
+		}
+
+		/// <summary>
+		/// Отклоняет бронь после непредвиденной ошибки и возвращает место в пул события.
+		/// Обновляет оба хранилища под семафором.
+		/// </summary>
+		private async Task RejectAndReleaseSeatAsync(Booking booking)
+		{
+			await _processingSemaphore.WaitAsync(CancellationToken.None);
+			try
+			{
+				if (booking.Status == BookingStatus.Pending)
+				{
+					booking.Reject(DateTime.UtcNow);
+					_bookingStore.Update(booking);
+				}
+
+				var ev = _eventStore.GetById(booking.EventId);
+				if (ev is not null)
+				{
+					ev.ReleaseSeats();
+					_eventStore.Update(ev);
+				}
+
+				_logger.LogWarning(
+					"Бронь {BookingId} отклонена из-за ошибки обработки, место возвращено в пул",
+					booking.Id);
+			}
+			catch (Exception ex)
+			{
+				_logger.LogError(ex, "Не удалось отклонить бронь {BookingId}", booking.Id);
+			}
+			finally
+			{
+				_processingSemaphore.Release();
 			}
 		}
 	}

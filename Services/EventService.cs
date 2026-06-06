@@ -1,165 +1,170 @@
+using EventsApi.DataAccess;
 using EventsApi.DTOs;
 using EventsApi.Exceptions;
 using EventsApi.Models;
 
 namespace EventsApi.Services
 {
-    public class EventService : IEventService
-    {
-        private readonly List<Event> _events = new();
-        private readonly object _lock = new();
+	public class EventService : IEventService
+	{
+		private readonly IEventStore _store;
 
-        public PaginatedResult<EventDto> GetAll(EventQueryParameters query)
-        {
-            ArgumentNullException.ThrowIfNull(query);
+		public EventService(IEventStore store)
+		{
+			_store = store;
+		}
 
-            // Нормализуем пагинацию: защищаемся от отрицательных/нулевых значений.
-            var page = query.Page < 1 ? 1 : query.Page;
-            var pageSize = query.PageSize < 1 ? 10 : query.PageSize;
+		// Удобный конструктор для использования без DI (например, в юнит-тестах).
+		public EventService() : this(new InMemoryEventStore()) { }
 
-            lock (_lock)
-            {
-                IEnumerable<Event> source = _events;
+		public PaginatedResult<EventDto> GetAll(EventQueryParameters query)
+		{
+			ArgumentNullException.ThrowIfNull(query);
 
-                // Фильтр по названию — регистронезависимое частичное совпадение.
-                if (!string.IsNullOrWhiteSpace(query.Title))
-                {
-                    var title = query.Title.Trim();
-                    source = source.Where(e =>
-                        e.Title.Contains(title, StringComparison.OrdinalIgnoreCase));
-                }
+			// Нормализуем пагинацию: защищаемся от отрицательных/нулевых значений.
+			var page = query.Page < 1 ? 1 : query.Page;
+			var pageSize = query.PageSize < 1 ? 10 : query.PageSize;
 
-                // from: событие должно НАЧИНАТЬСЯ не раньше указанной даты.
-                if (query.From.HasValue)
-                {
-                    var from = query.From.Value;
-                    source = source.Where(e => e.StartAt >= from);
-                }
+			// Работаем со снимком коллекции — хранилище потокобезопасно.
+			IEnumerable<Event> source = _store.GetAll();
 
-                // to: событие должно ЗАКАНЧИВАТЬСЯ не позже указанной даты.
-                if (query.To.HasValue)
-                {
-                    var to = query.To.Value;
-                    source = source.Where(e => e.EndAt <= to);
-                }
+			// Фильтр по названию — регистронезависимое частичное совпадение.
+			if (!string.IsNullOrWhiteSpace(query.Title))
+			{
+				var title = query.Title.Trim();
+				source = source.Where(e =>
+					e.Title.Contains(title, StringComparison.OrdinalIgnoreCase));
+			}
 
-                // Стабильная сортировка, чтобы пагинация была детерминированной.
-                var filtered = source
-                    .OrderBy(e => e.StartAt)
-                    .ThenBy(e => e.Id)
-                    .ToList();
+			// from: событие должно НАЧИНАТЬСЯ не раньше указанной даты.
+			if (query.From.HasValue)
+			{
+				var from = query.From.Value;
+				source = source.Where(e => e.StartAt >= from);
+			}
 
-                var totalCount = filtered.Count;
+			// to: событие должно ЗАКАНЧИВАТЬСЯ не позже указанной даты.
+			if (query.To.HasValue)
+			{
+				var to = query.To.Value;
+				source = source.Where(e => e.EndAt <= to);
+			}
 
-                var items = filtered
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
-                    .Select(MapToDto)
-                    .ToList();
+			// Стабильная сортировка, чтобы пагинация была детерминированной.
+			var filtered = source
+				.OrderBy(e => e.StartAt)
+				.ThenBy(e => e.Id)
+				.ToList();
 
-                return new PaginatedResult<EventDto>(items, totalCount, page, pageSize);
-            }
-        }
+			var totalCount = filtered.Count;
 
-        public EventDto GetById(Guid id)
-        {
-            lock (_lock)
-            {
-                var ev = _events.FirstOrDefault(e => e.Id == id)
-                    ?? throw NotFoundException.ForEvent(id);
-                return MapToDto(ev);
-            }
-        }
+			var items = filtered
+				.Skip((page - 1) * pageSize)
+				.Take(pageSize)
+				.Select(MapToDto)
+				.ToList();
 
-        public EventDto Create(CreateEventDto dto)
-        {
-            ArgumentNullException.ThrowIfNull(dto);
-            ValidateWrite(dto);
+			return new PaginatedResult<EventDto>(items, totalCount, page, pageSize);
+		}
 
-            var ev = new Event
-            {
-                Id = Guid.NewGuid(),
-                Title = dto.Title.Trim(),
-                Description = dto.Description,
-                StartAt = dto.StartAt,
-                EndAt = dto.EndAt
-            };
+		public EventDto GetById(Guid id)
+		{
+			var ev = _store.GetById(id)
+				?? throw NotFoundException.ForEvent(id);
+			return MapToDto(ev);
+		}
 
-            lock (_lock)
-            {
-                _events.Add(ev);
-            }
+		public EventDto Create(CreateEventDto dto)
+		{
+			ArgumentNullException.ThrowIfNull(dto);
+			ValidateWrite(dto);
 
-            return MapToDto(ev);
-        }
+			if (dto.TotalSeats is null)
+				throw new ValidationException(
+					"Некорректные данные мероприятия",
+					new Dictionary<string, string[]>
+					{
+						[nameof(dto.TotalSeats)] = new[] { "Поле TotalSeats обязательно" }
+					});
 
-        public EventDto Update(Guid id, UpdateEventDto dto)
-        {
-            ArgumentNullException.ThrowIfNull(dto);
-            ValidateWrite(dto);
+			// Фабричный метод валидирует totalSeats (> 0) и устанавливает
+			// AvailableSeats = TotalSeats.
+			var ev = Event.Create(
+				dto.Title.Trim(),
+				dto.Description,
+				dto.StartAt,
+				dto.EndAt,
+				dto.TotalSeats.Value);
 
-            lock (_lock)
-            {
-                var ev = _events.FirstOrDefault(e => e.Id == id)
-                    ?? throw NotFoundException.ForEvent(id);
+			_store.Add(ev);
 
-                ev.Title = dto.Title.Trim();
-                ev.Description = dto.Description;
-                ev.StartAt = dto.StartAt;
-                ev.EndAt = dto.EndAt;
+			return MapToDto(ev);
+		}
 
-                return MapToDto(ev);
-            }
-        }
+		public EventDto Update(Guid id, UpdateEventDto dto)
+		{
+			ArgumentNullException.ThrowIfNull(dto);
+			ValidateWrite(dto);
 
-        public void Delete(Guid id)
-        {
-            lock (_lock)
-            {
-                var ev = _events.FirstOrDefault(e => e.Id == id)
-                    ?? throw NotFoundException.ForEvent(id);
-                _events.Remove(ev);
-            }
-        }
+			var ev = _store.GetById(id)
+				?? throw NotFoundException.ForEvent(id);
 
-        /// <summary>
-        /// Валидация на уровне сервиса — защита от вызовов в обход контроллера
-        /// (в т. ч. из тестов). ModelState в контроллере тоже продолжает работать.
-        /// </summary>
-        private static void ValidateWrite(EventWriteDto dto)
-        {
-            var errors = new Dictionary<string, List<string>>();
+			ev.Title = dto.Title.Trim();
+			ev.Description = dto.Description;
+			ev.StartAt = dto.StartAt;
+			ev.EndAt = dto.EndAt;
 
-            if (string.IsNullOrWhiteSpace(dto.Title))
-                AddError(errors, nameof(dto.Title), "Title не может быть пустым");
+			_store.Update(ev);
 
-            if (dto.EndAt <= dto.StartAt)
-                AddError(errors, nameof(dto.EndAt), "EndAt должен быть позже StartAt");
+			return MapToDto(ev);
+		}
 
-            if (errors.Count > 0)
-            {
-                var dict = errors.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray());
-                throw new ValidationException("Некорректные данные мероприятия", dict);
-            }
-        }
+		public void Delete(Guid id)
+		{
+			if (!_store.Remove(id))
+				throw NotFoundException.ForEvent(id);
+		}
 
-        private static void AddError(Dictionary<string, List<string>> bag, string key, string msg)
-        {
-            if (!bag.TryGetValue(key, out var list))
-            {
-                list = new List<string>();
-                bag[key] = list;
-            }
-            list.Add(msg);
-        }
+		/// <summary>
+		/// Валидация на уровне сервиса — защита от вызовов в обход контроллера
+		/// (в т. ч. из тестов). ModelState в контроллере тоже продолжает работать.
+		/// </summary>
+		private static void ValidateWrite(EventWriteDto dto)
+		{
+			var errors = new Dictionary<string, List<string>>();
 
-        private static EventDto MapToDto(Event ev) => new()
-        {
-            Id = ev.Id,
-            Title = ev.Title,
-            Description = ev.Description,
-            StartAt = ev.StartAt,
-            EndAt = ev.EndAt
-        };
-    }
+			if (string.IsNullOrWhiteSpace(dto.Title))
+				AddError(errors, nameof(dto.Title), "Title не может быть пустым");
+
+			if (dto.EndAt <= dto.StartAt)
+				AddError(errors, nameof(dto.EndAt), "EndAt должен быть позже StartAt");
+
+			if (errors.Count > 0)
+			{
+				var dict = errors.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray());
+				throw new ValidationException("Некорректные данные мероприятия", dict);
+			}
+		}
+
+		private static void AddError(Dictionary<string, List<string>> bag, string key, string msg)
+		{
+			if (!bag.TryGetValue(key, out var list))
+			{
+				list = new List<string>();
+				bag[key] = list;
+			}
+			list.Add(msg);
+		}
+
+		private static EventDto MapToDto(Event ev) => new()
+		{
+			Id = ev.Id,
+			Title = ev.Title,
+			Description = ev.Description,
+			StartAt = ev.StartAt,
+			EndAt = ev.EndAt,
+			TotalSeats = ev.TotalSeats,
+			AvailableSeats = ev.AvailableSeats
+		};
+	}
 }

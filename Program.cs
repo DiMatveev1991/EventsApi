@@ -9,6 +9,8 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 // Сервисы приложения
+// События: хранилище + сервис (Singleton, т. к. данные in-memory).
+builder.Services.AddSingleton<IEventStore, InMemoryEventStore>();
 builder.Services.AddSingleton<IEventService, EventService>();
 
 // Бронирования: хранилище + сервис (Singleton, т. к. данные in-memory).
