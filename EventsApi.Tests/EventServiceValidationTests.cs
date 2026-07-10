@@ -2,139 +2,149 @@ using EventsApi.Exceptions;
 using EventsApi.Services;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class EventServiceValidationTests
+public class EventServiceValidationTests : IDisposable
 {
-	private readonly EventService _sut = new();
+	private readonly ServiceProvider _sp;
+	private readonly IEventService _sut;
+
+	public EventServiceValidationTests()
+	{
+		_sp = TestHost.Build();
+		_sut = _sp.GetRequiredService<IEventService>();
+	}
+
+	public void Dispose() => _sp.Dispose();
 
 	[Theory]
 	[InlineData("")]
 	[InlineData("   ")]
 	[InlineData(null)]
-	public void Create_WithEmptyOrWhitespaceTitle_ThrowsValidationException(string? title)
+	public async Task Create_WithEmptyOrWhitespaceTitle_ThrowsValidationException(string? title)
 	{
 		// Arrange
 		var dto = TestData.CreateDto(title: title!);
 
 		// Act
-		var act = () => _sut.Create(dto);
+		var act = async () => await _sut.CreateAsync(dto);
 
 		// Assert
-		act.Should()
-			.Throw<ValidationException>()
-			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest)
+		(await act.Should()
+			.ThrowAsync<ValidationException>()
+			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
 			.Which.Errors.Should().ContainKey("Title");
 	}
 
 	[Fact]
-	public void Create_WithEndAtBeforeStartAt_ThrowsValidationException()
+	public async Task Create_WithEndAtBeforeStartAt_ThrowsValidationException()
 	{
 		var dto = TestData.CreateDto(
 			startAt: new DateTime(2025, 06, 01, 12, 00, 00),
 			endAt: new DateTime(2025, 06, 01, 10, 00, 00));
 
-		var act = () => _sut.Create(dto);
+		var act = async () => await _sut.CreateAsync(dto);
 
-		act.Should()
-			.Throw<ValidationException>()
+		(await act.Should()
+			.ThrowAsync<ValidationException>())
 			.Which.Errors.Should().ContainKey("EndAt");
 	}
 
 	[Fact]
-	public void Create_WithEqualStartAndEnd_ThrowsValidationException()
+	public async Task Create_WithEqualStartAndEnd_ThrowsValidationException()
 	{
 		var when = new DateTime(2025, 06, 01, 10, 00, 00);
 		var dto = TestData.CreateDto(startAt: when, endAt: when);
 
-		var act = () => _sut.Create(dto);
+		var act = async () => await _sut.CreateAsync(dto);
 
-		act.Should().Throw<ValidationException>();
+		await act.Should().ThrowAsync<ValidationException>();
 	}
 
 	[Theory]
 	[InlineData(0)]
 	[InlineData(-1)]
 	[InlineData(-100)]
-	public void Create_WithNonPositiveTotalSeats_ThrowsValidationException(int totalSeats)
+	public async Task Create_WithNonPositiveTotalSeats_ThrowsValidationException(int totalSeats)
 	{
 		// Arrange
 		var dto = TestData.CreateDto(totalSeats: totalSeats);
 
 		// Act
-		var act = () => _sut.Create(dto);
+		var act = async () => await _sut.CreateAsync(dto);
 
 		// Assert
-		act.Should()
-			.Throw<ValidationException>()
-			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest)
+		(await act.Should()
+			.ThrowAsync<ValidationException>()
+			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
 			.Which.Errors.Should().ContainKey("TotalSeats");
 	}
 
 	[Fact]
-	public void Create_WithNullTotalSeats_ThrowsValidationException()
+	public async Task Create_WithNullTotalSeats_ThrowsValidationException()
 	{
 		// Arrange
 		var dto = TestData.CreateDto(totalSeats: null);
 
 		// Act
-		var act = () => _sut.Create(dto);
+		var act = async () => await _sut.CreateAsync(dto);
 
 		// Assert
-		act.Should()
-			.Throw<ValidationException>()
-			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest)
+		(await act.Should()
+			.ThrowAsync<ValidationException>()
+			.Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
 			.Which.Errors.Should().ContainKey("TotalSeats");
 	}
 
 	[Fact]
-	public void Update_WithEndAtBeforeStartAt_ThrowsValidationException()
+	public async Task Update_WithEndAtBeforeStartAt_ThrowsValidationException()
 	{
 		// Arrange
-		var existing = _sut.Create(TestData.CreateDto());
+		var existing = await _sut.CreateAsync(TestData.CreateDto());
 		var badUpdate = TestData.UpdateDto(
 			startAt: new DateTime(2025, 07, 01, 12, 00, 00),
 			endAt: new DateTime(2025, 07, 01, 10, 00, 00));
 
 		// Act
-		var act = () => _sut.Update(existing.Id, badUpdate);
+		var act = async () => await _sut.UpdateAsync(existing.Id, badUpdate);
 
 		// Assert
-		act.Should()
-			.Throw<ValidationException>()
+		(await act.Should()
+			.ThrowAsync<ValidationException>())
 			.Which.Errors.Should().ContainKey("EndAt");
 	}
 
 	[Fact]
-	public void Update_WithEmptyTitle_ThrowsValidationException()
+	public async Task Update_WithEmptyTitle_ThrowsValidationException()
 	{
-		var existing = _sut.Create(TestData.CreateDto());
+		var existing = await _sut.CreateAsync(TestData.CreateDto());
 		var badUpdate = TestData.UpdateDto(title: "");
 
-		var act = () => _sut.Update(existing.Id, badUpdate);
+		var act = async () => await _sut.UpdateAsync(existing.Id, badUpdate);
 
-		act.Should()
-			.Throw<ValidationException>()
+		(await act.Should()
+			.ThrowAsync<ValidationException>())
 			.Which.Errors.Should().ContainKey("Title");
 	}
 
 	[Fact]
-	public void Create_WithNullDto_ThrowsArgumentNullException()
+	public async Task Create_WithNullDto_ThrowsArgumentNullException()
 	{
-		var act = () => _sut.Create(null!);
+		var act = async () => await _sut.CreateAsync(null!);
 
-		act.Should().Throw<ArgumentNullException>();
+		await act.Should().ThrowAsync<ArgumentNullException>();
 	}
 
 	[Fact]
-	public void Update_WithNullDto_ThrowsArgumentNullException()
+	public async Task Update_WithNullDto_ThrowsArgumentNullException()
 	{
-		var existing = _sut.Create(TestData.CreateDto());
+		var existing = await _sut.CreateAsync(TestData.CreateDto());
 
-		var act = () => _sut.Update(existing.Id, null!);
+		var act = async () => await _sut.UpdateAsync(existing.Id, null!);
 
-		act.Should().Throw<ArgumentNullException>();
+		await act.Should().ThrowAsync<ArgumentNullException>();
 	}
 }

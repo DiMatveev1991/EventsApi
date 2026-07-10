@@ -2,57 +2,67 @@ using EventsApi.DataAccess;
 using EventsApi.DTOs;
 using EventsApi.Exceptions;
 using EventsApi.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace EventsApi.Services
 {
 	public class BookingService : IBookingService
 	{
-		private readonly IBookingStore _bookingStore;
-		private readonly IEventStore _eventStore;
+		private readonly AppDbContext _context;
 
 		// Защищает критическую секцию «проверка доступных мест + создание брони».
-		private readonly object _bookingLock = new();
+		// Сервис — scoped (у каждого запроса свой DbContext), поэтому семафор
+		// статический: он синхронизирует все экземпляры между собой. SemaphoreSlim
+		// (а не lock) нужен потому, что внутри секции есть await-вызовы.
+		private static readonly SemaphoreSlim _bookingSemaphore = new(1, 1);
 
-		public BookingService(IBookingStore bookingStore, IEventStore eventStore)
+		public BookingService(AppDbContext context)
 		{
-			_bookingStore = bookingStore;
-			_eventStore = eventStore;
+			_context = context;
 		}
 
-		public Task<BookingDto> CreateBookingAsync(Guid eventId, CancellationToken cancellationToken = default)
+		public async Task<BookingDto> CreateBookingAsync(Guid eventId, CancellationToken cancellationToken = default)
 		{
-			// Атомарная пара «проверка + изменение»: без lock два потока могут
+			// Атомарная пара «проверка + изменение»: без синхронизации два потока могут
 			// одновременно увидеть AvailableSeats > 0 и создать брони сверх лимита
-			// (овербукинг). lock гарантирует, что через секцию проходит один поток.
-			lock (_bookingLock)
+			// (овербукинг). Семафор гарантирует, что через секцию проходит один поток.
+			await _bookingSemaphore.WaitAsync(cancellationToken);
+			try
 			{
-				// 1. Получение события из хранилища.
-				var ev = _eventStore.GetById(eventId)
+				// 1. Получение события из БД (внутри секции — чтобы видеть актуальные места).
+				var ev = await _context.Events
+					.FirstOrDefaultAsync(e => e.Id == eventId, cancellationToken)
 					?? throw NotFoundException.ForEvent(eventId);
 
-				// 2. Проверка доступных мест.
+				// 2. Проверка и резервирование места.
 				if (!ev.TryReserveSeats())
 					throw new NoAvailableSeatsException();
 
-				// 3. Сохранение обновлённого события.
-				_eventStore.Update(ev);
-
-				// 4. Создание и сохранение брони.
+				// 3. Создание брони.
 				var booking = Booking.CreatePending(eventId);
-				_bookingStore.Add(booking);
+				_context.Bookings.Add(booking);
 
-				return Task.FromResult(MapToDto(booking));
+				// 4. Один вызов SaveChanges сохраняет и новую бронь, и изменение
+				// AvailableSeats — оба объекта отслеживаются одним контекстом.
+				await _context.SaveChangesAsync(cancellationToken);
+
+				return MapToDto(booking);
+			}
+			finally
+			{
+				_bookingSemaphore.Release();
 			}
 		}
 
-		public Task<BookingDto> GetBookingByIdAsync(Guid bookingId, CancellationToken cancellationToken = default)
+		public async Task<BookingDto> GetBookingByIdAsync(Guid bookingId, CancellationToken cancellationToken = default)
 		{
-			// Операция чтения — блокировка не нужна, lock охватывает только
-			// минимально необходимую критическую секцию в CreateBookingAsync.
-			var booking = _bookingStore.GetById(bookingId)
+			// Операция чтения — синхронизация не нужна.
+			var booking = await _context.Bookings
+				.AsNoTracking()
+				.FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken)
 				?? throw NotFoundException.ForBooking(bookingId);
 
-			return Task.FromResult(MapToDto(booking));
+			return MapToDto(booking);
 		}
 
 		internal static BookingDto MapToDto(Booking booking) => new()

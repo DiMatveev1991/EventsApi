@@ -4,12 +4,14 @@ using EventsApi.DTOs;
 using EventsApi.Models;
 using EventsApi.Services;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class BookingProcessorTests
+public class BookingProcessorTests : IDisposable
 {
 	/// <summary>
 	/// Время ожидания обработки. Сервис делает Task.Delay(2 сек) на каждую бронь
@@ -17,22 +19,73 @@ public class BookingProcessorTests
 	/// </summary>
 	private static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(10);
 
-	private static (IEventService events, IBookingStore store, BookingProcessor processor)
-		BuildSut()
+	private readonly ServiceProvider _sp;
+
+	public BookingProcessorTests()
 	{
-		IEventStore eventStore = new InMemoryEventStore();
-		IEventService events = new EventService(eventStore);
-		IBookingStore store = new InMemoryBookingStore();
-		var processor = new BookingProcessor(store, eventStore, NullLogger<BookingProcessor>.Instance);
-		return (events, store, processor);
+		_sp = TestHost.Build();
 	}
 
-	private static async Task<Booking> WaitUntilProcessedAsync(IBookingStore store, Guid bookingId)
+	public void Dispose() => _sp.Dispose();
+
+	private BookingProcessor CreateProcessor() =>
+		new(_sp.GetRequiredService<IServiceScopeFactory>(),
+			NullLogger<BookingProcessor>.Instance);
+
+	private async Task<Guid> CreateEventAsync(int totalSeats = 100)
+	{
+		using var scope = _sp.CreateScope();
+		var events = scope.ServiceProvider.GetRequiredService<IEventService>();
+		var ev = await events.CreateAsync(TestData.CreateDto(totalSeats: totalSeats));
+		return ev.Id;
+	}
+
+	private async Task<Guid> AddPendingBookingAsync(Guid eventId)
+	{
+		using var scope = _sp.CreateScope();
+		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+		var booking = Booking.CreatePending(eventId);
+		db.Bookings.Add(booking);
+		await db.SaveChangesAsync();
+		return booking.Id;
+	}
+
+	private async Task DeleteEventAsync(Guid eventId)
+	{
+		// Отдельный scope: событие удаляется без отслеживания брони, поэтому бронь
+		// остаётся в базе и будет отклонена фоновым сервисом.
+		using var scope = _sp.CreateScope();
+		var events = scope.ServiceProvider.GetRequiredService<IEventService>();
+		await events.DeleteAsync(eventId);
+	}
+
+	private async Task<Booking?> GetBookingAsync(Guid bookingId)
+	{
+		using var scope = _sp.CreateScope();
+		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+		return await db.Bookings.AsNoTracking().FirstOrDefaultAsync(b => b.Id == bookingId);
+	}
+
+	private async Task<int> PendingCountAsync()
+	{
+		using var scope = _sp.CreateScope();
+		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+		return await db.Bookings.CountAsync(b => b.Status == BookingStatus.Pending);
+	}
+
+	private async Task<List<Booking>> AllBookingsAsync()
+	{
+		using var scope = _sp.CreateScope();
+		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+		return await db.Bookings.AsNoTracking().ToListAsync();
+	}
+
+	private async Task<Booking> WaitUntilProcessedAsync(Guid bookingId)
 	{
 		var deadline = DateTime.UtcNow + MaxWait;
 		while (DateTime.UtcNow < deadline)
 		{
-			var booking = store.GetById(bookingId);
+			var booking = await GetBookingAsync(bookingId);
 			if (booking is not null && booking.Status != BookingStatus.Pending)
 				return booking;
 
@@ -47,14 +100,13 @@ public class BookingProcessorTests
 	public async Task ProcessesPendingBooking_ToConfirmed_WhenEventExists()
 	{
 		// Arrange
-		var (events, store, processor) = BuildSut();
-		var ev = events.Create(TestData.CreateDto());
-		var booking = Booking.CreatePending(ev.Id);
-		store.Add(booking);
+		var evId = await CreateEventAsync();
+		var bookingId = await AddPendingBookingAsync(evId);
+		var processor = CreateProcessor();
 
 		// Act
 		await processor.StartAsync(CancellationToken.None);
-		var processed = await WaitUntilProcessedAsync(store, booking.Id);
+		var processed = await WaitUntilProcessedAsync(bookingId);
 		await processor.StopAsync(CancellationToken.None);
 
 		// Assert
@@ -67,17 +119,16 @@ public class BookingProcessorTests
 	public async Task ProcessesPendingBooking_ToRejected_WhenEventDeleted()
 	{
 		// Arrange
-		var (events, store, processor) = BuildSut();
-		var ev = events.Create(TestData.CreateDto());
-		var booking = Booking.CreatePending(ev.Id);
-		store.Add(booking);
+		var evId = await CreateEventAsync();
+		var bookingId = await AddPendingBookingAsync(evId);
 
 		// Удаляем событие до того, как фоновый сервис до него доберётся.
-		events.Delete(ev.Id);
+		await DeleteEventAsync(evId);
 
 		// Act
+		var processor = CreateProcessor();
 		await processor.StartAsync(CancellationToken.None);
-		var processed = await WaitUntilProcessedAsync(store, booking.Id);
+		var processed = await WaitUntilProcessedAsync(bookingId);
 		await processor.StopAsync(CancellationToken.None);
 
 		// Assert
@@ -89,24 +140,20 @@ public class BookingProcessorTests
 	public async Task ProcessesMultiplePendingBookings_InParallel()
 	{
 		// Arrange
-		var (events, store, processor) = BuildSut();
-		var ev = events.Create(TestData.CreateDto());
-
-		var b1 = Booking.CreatePending(ev.Id);
-		var b2 = Booking.CreatePending(ev.Id);
-		var b3 = Booking.CreatePending(ev.Id);
-		store.Add(b1);
-		store.Add(b2);
-		store.Add(b3);
+		var evId = await CreateEventAsync();
+		await AddPendingBookingAsync(evId);
+		await AddPendingBookingAsync(evId);
+		await AddPendingBookingAsync(evId);
 
 		// Act
 		var started = DateTime.UtcNow;
+		var processor = CreateProcessor();
 		await processor.StartAsync(CancellationToken.None);
 
 		var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
 		while (DateTime.UtcNow < deadline)
 		{
-			if (store.GetPending().Count == 0) break;
+			if (await PendingCountAsync() == 0) break;
 			await Task.Delay(200);
 		}
 		var elapsed = DateTime.UtcNow - started;
@@ -114,8 +161,8 @@ public class BookingProcessorTests
 		await processor.StopAsync(CancellationToken.None);
 
 		// Assert
-		store.GetPending().Should().BeEmpty();
-		store.GetAll().Should().OnlyContain(b => b.Status == BookingStatus.Confirmed);
+		(await PendingCountAsync()).Should().Be(0);
+		(await AllBookingsAsync()).Should().OnlyContain(b => b.Status == BookingStatus.Confirmed);
 
 		// Задержки выполняются параллельно: 3 брони по 2 сек обрабатываются
 		// значительно быстрее, чем 6 сек последовательной обработки.
@@ -126,7 +173,7 @@ public class BookingProcessorTests
 	public async Task StopAsync_CancelsGracefully_WithoutThrowing()
 	{
 		// Arrange
-		var (_, _, processor) = BuildSut();
+		var processor = CreateProcessor();
 
 		// Act
 		await processor.StartAsync(CancellationToken.None);
@@ -141,14 +188,14 @@ public class BookingProcessorTests
 	public async Task DoesNothing_WhenNoPendingBookings()
 	{
 		// Arrange
-		var (_, store, processor) = BuildSut();
+		var processor = CreateProcessor();
 
 		// Act
 		await processor.StartAsync(CancellationToken.None);
-		await Task.Delay(1500); // даём сервису поработать на пустом сторе
+		await Task.Delay(1500); // даём сервису поработать на пустой базе
 		await processor.StopAsync(CancellationToken.None);
 
 		// Assert
-		store.GetAll().Should().BeEmpty();
+		(await AllBookingsAsync()).Should().BeEmpty();
 	}
 }

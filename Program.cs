@@ -4,18 +4,18 @@ using EventsApi.DataAccess;
 using EventsApi.Middleware;
 using EventsApi.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Сервисы приложения
-// События: хранилище + сервис (Singleton, т. к. данные in-memory).
-builder.Services.AddSingleton<IEventStore, InMemoryEventStore>();
-builder.Services.AddSingleton<IEventService, EventService>();
+// Слой данных: PostgreSQL через EF Core. DbContext регистрируется как scoped.
+builder.Services.AddDbContext<AppDbContext>(options =>
+	options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Бронирования: хранилище + сервис (Singleton, т. к. данные in-memory).
-builder.Services.AddSingleton<IBookingStore, InMemoryBookingStore>();
-builder.Services.AddSingleton<IBookingService, BookingService>();
+// Сервисы приложения — scoped, т. к. зависят от scoped-контекста AppDbContext.
+builder.Services.AddScoped<IEventService, EventService>();
+builder.Services.AddScoped<IBookingService, BookingService>();
 
 // Фоновая обработка Pending-броней.
 builder.Services.AddHostedService<BookingProcessor>();
@@ -76,6 +76,13 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 var app = builder.Build();
+
+// Создаём схему БД при старте, если её ещё нет (EnsureCreated не использует миграции).
+using (var scope = app.Services.CreateScope())
+{
+	var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+	db.Database.EnsureCreated();
+}
 
 // Middleware должен стоять раньше всех остальных, чтобы ловить любые исключения.
 app.UseGlobalExceptionHandler();

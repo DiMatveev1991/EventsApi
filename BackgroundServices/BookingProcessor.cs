@@ -1,42 +1,36 @@
 using EventsApi.DataAccess;
 using EventsApi.DTOs;
-using EventsApi.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace EventsApi.BackgroundServices
 {
 	/// <summary>
-	/// Фоновый сервис, периодически забирающий из хранилища брони в статусе Pending
+	/// Фоновый сервис, периодически забирающий из БД брони в статусе Pending
 	/// и обрабатывающий их параллельно: бронь переводится в Confirmed, либо в Rejected,
 	/// если событие к моменту обработки уже удалено или произошла непредвиденная ошибка.
 	/// </summary>
 	/// <remarks>
-	/// Имитирует обращение к внешней системе через <see cref="Task.Delay(TimeSpan, CancellationToken)"/>.
-	/// Задержки выполняются параллельно (до захвата семафора), а секция
-	/// «проверка события + смена статуса + запись в хранилища» защищена
-	/// <see cref="SemaphoreSlim"/> — асинхронным аналогом мьютекса. Обычный lock
-	/// здесь не подходит: внутри защищаемой секции есть await.
+	/// BackgroundService — синглтон, а <see cref="AppDbContext"/> — scoped, поэтому
+	/// зависимости получаем через <see cref="IServiceScopeFactory"/>: для каждой брони
+	/// создаётся свой scope со своим DbContext. Так как контексты не разделяются между
+	/// задачами, дополнительная синхронизация (семафор) не нужна — изоляцию обеспечивает
+	/// отдельный экземпляр контекста на каждую задачу.
 	/// </remarks>
 	public class BookingProcessor : BackgroundService
 	{
 		// Имитация задержки внешнего вызова.
 		private static readonly TimeSpan ProcessingDelay = TimeSpan.FromSeconds(2);
-		// Период опроса хранилища между итерациями.
+		// Период опроса БД между итерациями.
 		private static readonly TimeSpan PollingInterval = TimeSpan.FromMilliseconds(500);
 
-		private readonly IBookingStore _bookingStore;
-		private readonly IEventStore _eventStore;
+		private readonly IServiceScopeFactory _scopeFactory;
 		private readonly ILogger<BookingProcessor> _logger;
 
-		// Защищает запись в хранилища при параллельной обработке броней.
-		private readonly SemaphoreSlim _processingSemaphore = new(1, 1);
-
 		public BookingProcessor(
-			IBookingStore bookingStore,
-			IEventStore eventStore,
+			IServiceScopeFactory scopeFactory,
 			ILogger<BookingProcessor> logger)
 		{
-			_bookingStore = bookingStore;
-			_eventStore = eventStore;
+			_scopeFactory = scopeFactory;
 			_logger = logger;
 		}
 
@@ -75,103 +69,109 @@ namespace EventsApi.BackgroundServices
 
 		private async Task ProcessPendingBatchAsync(CancellationToken stoppingToken)
 		{
-			var pendingBookings = _bookingStore.GetPending().ToList();
-			if (pendingBookings.Count == 0)
+			// Отдельный scope для чтения идентификаторов Pending-броней; закрывается сразу.
+			List<Guid> pendingIds;
+			using (var scope = _scopeFactory.CreateScope())
+			{
+				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+				pendingIds = await db.Bookings
+					.Where(b => b.Status == BookingStatus.Pending)
+					.Select(b => b.Id)
+					.ToListAsync(stoppingToken);
+			}
+
+			if (pendingIds.Count == 0)
 				return;
 
-			// Параллельный запуск обработки всех Pending-броней.
-			var tasks = pendingBookings.Select(booking => ProcessBookingAsync(booking, stoppingToken));
+			// Параллельный запуск обработки всех Pending-броней — у каждой свой scope.
+			var tasks = pendingIds.Select(id => ProcessBookingAsync(id, stoppingToken));
 			await Task.WhenAll(tasks);
 		}
 
-		private async Task ProcessBookingAsync(Booking booking, CancellationToken stoppingToken)
+		private async Task ProcessBookingAsync(Guid bookingId, CancellationToken stoppingToken)
 		{
 			try
 			{
-				_logger.LogInformation(
-					"Начата обработка брони {BookingId} для события {EventId}",
-					booking.Id, booking.EventId);
+				_logger.LogInformation("Начата обработка брони {BookingId}", bookingId);
 
-				// Имитация внешнего вызова ДО захвата семафора —
+				// Имитация внешнего вызова ДО создания scope —
 				// задержки разных броней выполняются параллельно.
 				await Task.Delay(ProcessingDelay, stoppingToken);
 
-				// Семафор защищает секцию «проверка события + смена статуса + запись».
-				await _processingSemaphore.WaitAsync(stoppingToken);
-				try
-				{
-					// Бронь могла быть обработана ранее (например, повторный запуск).
-					if (booking.Status != BookingStatus.Pending)
-						return;
+				using var scope = _scopeFactory.CreateScope();
+				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-					var ev = _eventStore.GetById(booking.EventId);
-					if (ev is null)
-					{
-						booking.Reject(DateTime.UtcNow);
-						_bookingStore.Update(booking);
-						_logger.LogWarning(
-							"Бронь {BookingId} отклонена: событие {EventId} больше не существует",
-							booking.Id, booking.EventId);
-						return;
-					}
+				var booking = await db.Bookings
+					.FirstOrDefaultAsync(b => b.Id == bookingId, stoppingToken);
 
-					booking.Confirm(DateTime.UtcNow);
-					_bookingStore.Update(booking);
-					_logger.LogInformation("Бронь {BookingId} подтверждена", booking.Id);
-				}
-				finally
+				// Бронь могла быть удалена или уже обработана ранее.
+				if (booking is null || booking.Status != BookingStatus.Pending)
+					return;
+
+				var ev = await db.Events
+					.FirstOrDefaultAsync(e => e.Id == booking.EventId, stoppingToken);
+
+				if (ev is null)
 				{
-					_processingSemaphore.Release();
+					booking.Reject(DateTime.UtcNow);
+					await db.SaveChangesAsync(stoppingToken);
+					_logger.LogWarning(
+						"Бронь {BookingId} отклонена: событие {EventId} больше не существует",
+						booking.Id, booking.EventId);
+					return;
 				}
+
+				booking.Confirm(DateTime.UtcNow);
+				await db.SaveChangesAsync(stoppingToken);
+				_logger.LogInformation("Бронь {BookingId} подтверждена", booking.Id);
 			}
 			catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
 			{
 				// Штатная остановка: бронь остаётся Pending и будет
 				// обработана после перезапуска сервиса.
 				_logger.LogInformation(
-					"Обработка брони {BookingId} прервана остановкой сервиса", booking.Id);
+					"Обработка брони {BookingId} прервана остановкой сервиса", bookingId);
 			}
 			catch (Exception ex)
 			{
 				_logger.LogError(ex,
-					"Непредвиденная ошибка при обработке брони {BookingId}", booking.Id);
-				await RejectAndReleaseSeatAsync(booking);
+					"Непредвиденная ошибка при обработке брони {BookingId}", bookingId);
+				await RejectAndReleaseSeatAsync(bookingId);
 			}
 		}
 
 		/// <summary>
 		/// Отклоняет бронь после непредвиденной ошибки и возвращает место в пул события.
-		/// Обновляет оба хранилища под семафором.
+		/// Работает в собственном scope; и бронь, и событие сохраняются одним SaveChanges.
 		/// </summary>
-		private async Task RejectAndReleaseSeatAsync(Booking booking)
+		private async Task RejectAndReleaseSeatAsync(Guid bookingId)
 		{
-			await _processingSemaphore.WaitAsync(CancellationToken.None);
 			try
 			{
-				if (booking.Status == BookingStatus.Pending)
-				{
-					booking.Reject(DateTime.UtcNow);
-					_bookingStore.Update(booking);
-				}
+				using var scope = _scopeFactory.CreateScope();
+				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-				var ev = _eventStore.GetById(booking.EventId);
-				if (ev is not null)
-				{
-					ev.ReleaseSeats();
-					_eventStore.Update(ev);
-				}
+				var booking = await db.Bookings
+					.FirstOrDefaultAsync(b => b.Id == bookingId);
+				if (booking is null)
+					return;
+
+				if (booking.Status == BookingStatus.Pending)
+					booking.Reject(DateTime.UtcNow);
+
+				var ev = await db.Events
+					.FirstOrDefaultAsync(e => e.Id == booking.EventId);
+				ev?.ReleaseSeats();
+
+				await db.SaveChangesAsync();
 
 				_logger.LogWarning(
 					"Бронь {BookingId} отклонена из-за ошибки обработки, место возвращено в пул",
-					booking.Id);
+					bookingId);
 			}
 			catch (Exception ex)
 			{
-				_logger.LogError(ex, "Не удалось отклонить бронь {BookingId}", booking.Id);
-			}
-			finally
-			{
-				_processingSemaphore.Release();
+				_logger.LogError(ex, "Не удалось отклонить бронь {BookingId}", bookingId);
 			}
 		}
 	}

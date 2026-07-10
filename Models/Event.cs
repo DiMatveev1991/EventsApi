@@ -6,22 +6,29 @@ namespace EventsApi.Models
 	{
 		private readonly object _seatsLock = new();
 
+		// РџСЂРёРІР°С‚РЅС‹Р№ РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ Р±РµР· РїР°СЂР°РјРµС‚СЂРѕРІ РЅСѓР¶РµРЅ EF Core: РїСЂРѕРІР°Р№РґРµСЂ СЃРѕР·РґР°С‘С‚
+		// СЌРєР·РµРјРїР»СЏСЂС‹ С‡РµСЂРµР· СЂРµС„Р»РµРєСЃРёСЋ РїСЂРё С‡С‚РµРЅРёРё РґР°РЅРЅС‹С… РёР· Р‘Р”.
+		private Event() { }
+
 		public Guid Id { get; set; }
 		public string Title { get; set; } = string.Empty;
 		public string? Description { get; set; }
 		public DateTime StartAt { get; set; }
 		public DateTime EndAt { get; set; }
 
-		/// <summary>Общее количество мест на событии.</summary>
+		/// <summary>РћР±С‰РµРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РЅР° СЃРѕР±С‹С‚РёРё.</summary>
 		public int TotalSeats { get; set; }
 
-		/// <summary>Текущее количество свободных мест.</summary>
+		/// <summary>РўРµРєСѓС‰РµРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РґРѕСЃС‚СѓРїРЅС‹С… РјРµСЃС‚.</summary>
 		public int AvailableSeats { get; set; }
 
+		/// <summary>РќР°РІРёРіР°С†РёРѕРЅРЅРѕРµ СЃРІРѕР№СЃС‚РІРѕ: Р±СЂРѕРЅРё, РѕС‚РЅРѕСЃСЏС‰РёРµСЃСЏ Рє СЌС‚РѕРјСѓ СЃРѕР±С‹С‚РёСЋ.</summary>
+		public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
+
 		/// <summary>
-		/// Фабричный метод создания события. Валидирует totalSeats:
-		/// значение должно быть больше нуля, иначе — <see cref="ValidationException"/>.
-		/// При создании AvailableSeats равно TotalSeats.
+		/// Р¤Р°Р±СЂРёС‡РЅС‹Р№ РјРµС‚РѕРґ СЃРѕР·РґР°РЅРёСЏ СЃРѕР±С‹С‚РёСЏ. Р’Р°Р»РёРґРёСЂСѓРµС‚ totalSeats:
+		/// Р·РЅР°С‡РµРЅРёРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ РЅСѓР»СЏ, РёРЅР°С‡Рµ вЂ” <see cref="ValidationException"/>.
+		/// РџСЂРё СЃРѕР·РґР°РЅРёРё AvailableSeats СЂР°РІРЅРѕ TotalSeats.
 		/// </summary>
 		public static Event Create(
 			string title,
@@ -32,10 +39,10 @@ namespace EventsApi.Models
 		{
 			if (totalSeats <= 0)
 				throw new ValidationException(
-					"TotalSeats должен быть больше нуля",
+					"TotalSeats РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ РЅСѓР»СЏ",
 					new Dictionary<string, string[]>
 					{
-						[nameof(TotalSeats)] = new[] { "TotalSeats должен быть больше нуля" }
+						[nameof(TotalSeats)] = new[] { "TotalSeats РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ РЅСѓР»СЏ" }
 					});
 
 			return new Event
@@ -51,8 +58,8 @@ namespace EventsApi.Models
 		}
 
 		/// <summary>
-		/// Пытается зарезервировать места: возвращает false, если свободных мест
-		/// недостаточно; иначе уменьшает AvailableSeats на count и возвращает true.
+		/// РџС‹С‚Р°РµС‚СЃСЏ Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°С‚СЊ РјРµСЃС‚Р°: РІРѕР·РІСЂР°С‰Р°РµС‚ false, РµСЃР»Рё СЃРІРѕР±РѕРґРЅС‹С… РјРµСЃС‚
+		/// РЅРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ; РёРЅР°С‡Рµ СѓРјРµРЅСЊС€Р°РµС‚ AvailableSeats РЅР° count Рё РІРѕР·РІСЂР°С‰Р°РµС‚ true.
 		/// </summary>
 		public bool TryReserveSeats(int count = 1)
 		{
@@ -66,7 +73,7 @@ namespace EventsApi.Models
 			}
 		}
 
-		/// <summary>Освобождает места (например, при отклонении брони).</summary>
+		/// <summary>Р’РѕР·РІСЂР°С‰Р°РµС‚ РјРµСЃС‚Р° РІ РїСѓР» (РЅР°РїСЂРёРјРµСЂ, РїСЂРё РѕС‚РєР»РѕРЅРµРЅРёРё Р±СЂРѕРЅРё).</summary>
 		public void ReleaseSeats(int count = 1)
 		{
 			lock (_seatsLock)

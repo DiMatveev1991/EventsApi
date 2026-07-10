@@ -1,29 +1,34 @@
 using EventsApi.DataAccess;
 using EventsApi.DTOs;
 using EventsApi.Exceptions;
+using EventsApi.Models;
 using EventsApi.Services;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class BookingServiceTests
+public class BookingServiceTests : IDisposable
 {
-	private readonly IEventStore _eventStore;
+	private readonly ServiceProvider _sp;
+	private readonly IBookingService _sut;
 	private readonly IEventService _eventService;
-	private readonly IBookingStore _bookingStore;
-	private readonly BookingService _sut;
+	private readonly AppDbContext _context;
 
 	public BookingServiceTests()
 	{
-		_eventStore = new InMemoryEventStore();
-		_eventService = new EventService(_eventStore);
-		_bookingStore = new InMemoryBookingStore();
-		_sut = new BookingService(_bookingStore, _eventStore);
+		_sp = TestHost.Build();
+		_sut = _sp.GetRequiredService<IBookingService>();
+		_eventService = _sp.GetRequiredService<IEventService>();
+		_context = _sp.GetRequiredService<AppDbContext>();
 	}
 
-	private EventDto CreateTestEvent(int totalSeats = 10) =>
-		_eventService.Create(TestData.CreateDto(totalSeats: totalSeats));
+	public void Dispose() => _sp.Dispose();
+
+	private Task<EventDto> CreateTestEvent(int totalSeats = 10) =>
+		_eventService.CreateAsync(TestData.CreateDto(totalSeats: totalSeats));
 
 	// ---------- Успешные сценарии ----------
 
@@ -31,7 +36,7 @@ public class BookingServiceTests
 	public async Task CreateBookingAsync_ForExistingEvent_ReturnsPendingBooking()
 	{
 		// Arrange
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 
 		// Act
 		var booking = await _sut.CreateBookingAsync(ev.Id);
@@ -48,25 +53,25 @@ public class BookingServiceTests
 	[Fact]
 	public async Task CreateBookingAsync_PersistsBookingInStore()
 	{
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 
 		var dto = await _sut.CreateBookingAsync(ev.Id);
 
-		_bookingStore.GetById(dto.Id).Should().NotBeNull();
+		(await _context.Bookings.AsNoTracking()
+			.FirstOrDefaultAsync(b => b.Id == dto.Id)).Should().NotBeNull();
 	}
 
 	[Fact]
 	public async Task CreateBookingAsync_DecreasesAvailableSeats_AfterEachBooking()
 	{
 		// Arrange
-		var ev = CreateTestEvent(totalSeats: 3);
+		var ev = await CreateTestEvent(totalSeats: 3);
 
-		// Act + Assert: после каждой успешной брони AvailableSeats
-		// в хранилище уменьшается ровно на 1.
+		// Act + Assert: после каждой успешной брони AvailableSeats уменьшается на 1.
 		for (var i = 1; i <= 3; i++)
 		{
 			await _sut.CreateBookingAsync(ev.Id);
-			_eventService.GetById(ev.Id).AvailableSeats.Should().Be(3 - i);
+			(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(3 - i);
 		}
 	}
 
@@ -74,7 +79,7 @@ public class BookingServiceTests
 	public async Task CreateBookingAsync_UpToLimit_AllSucceedWithUniqueIds()
 	{
 		// Arrange
-		var ev = CreateTestEvent(totalSeats: 5);
+		var ev = await CreateTestEvent(totalSeats: 5);
 
 		// Act: создаём брони до лимита.
 		var bookings = new List<BookingDto>();
@@ -85,14 +90,14 @@ public class BookingServiceTests
 		bookings.Should().HaveCount(5);
 		bookings.Select(b => b.Id).Should().OnlyHaveUniqueItems();
 		bookings.Should().OnlyContain(b => b.Status == BookingStatus.Pending);
-		_eventService.GetById(ev.Id).AvailableSeats.Should().Be(0);
+		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
 	}
 
 	[Fact]
 	public async Task CreateBookingAsync_MultipleBookingsForSameEvent_AllHaveUniqueIds()
 	{
 		// Arrange
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 
 		// Act
 		var a = await _sut.CreateBookingAsync(ev.Id);
@@ -109,7 +114,7 @@ public class BookingServiceTests
 	[Fact]
 	public async Task GetBookingByIdAsync_ExistingId_ReturnsCorrectBooking()
 	{
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 		var created = await _sut.CreateBookingAsync(ev.Id);
 
 		var fetched = await _sut.GetBookingByIdAsync(created.Id);
@@ -123,13 +128,13 @@ public class BookingServiceTests
 	public async Task GetBookingByIdAsync_ReflectsStatusChange_AfterConfirm()
 	{
 		// Arrange
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 		var created = await _sut.CreateBookingAsync(ev.Id);
 
 		// Симулируем обработку: меняем статус через доменный метод и сохраняем.
-		var entity = _bookingStore.GetById(created.Id)!;
+		var entity = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
 		entity.Confirm(DateTime.UtcNow);
-		_bookingStore.Update(entity);
+		await _context.SaveChangesAsync();
 
 		// Act
 		var fetched = await _sut.GetBookingByIdAsync(created.Id);
@@ -142,12 +147,12 @@ public class BookingServiceTests
 	[Fact]
 	public async Task GetBookingByIdAsync_ReflectsStatusChange_AfterReject()
 	{
-		var ev = CreateTestEvent();
+		var ev = await CreateTestEvent();
 		var created = await _sut.CreateBookingAsync(ev.Id);
 
-		var entity = _bookingStore.GetById(created.Id)!;
+		var entity = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
 		entity.Reject(DateTime.UtcNow);
-		_bookingStore.Update(entity);
+		await _context.SaveChangesAsync();
 
 		var fetched = await _sut.GetBookingByIdAsync(created.Id);
 
@@ -161,31 +166,33 @@ public class BookingServiceTests
 	public async Task RejectAndReleaseSeats_RestoresAvailableSeats()
 	{
 		// Arrange: единственное место занято.
-		var ev = CreateTestEvent(totalSeats: 1);
+		var ev = await CreateTestEvent(totalSeats: 1);
 		var created = await _sut.CreateBookingAsync(ev.Id);
-		_eventService.GetById(ev.Id).AvailableSeats.Should().Be(0);
+		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
 
 		// Act: отклоняем бронь и возвращаем место в пул.
-		var booking = _bookingStore.GetById(created.Id)!;
+		var booking = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
 		booking.Reject(DateTime.UtcNow);
-		_bookingStore.Update(booking);
-		_eventStore.GetById(ev.Id)!.ReleaseSeats();
+		var entity = await _context.Events.FirstAsync(e => e.Id == ev.Id);
+		entity.ReleaseSeats();
+		await _context.SaveChangesAsync();
 
 		// Assert
-		_eventService.GetById(ev.Id).AvailableSeats.Should().Be(1);
+		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(1);
 	}
 
 	[Fact]
 	public async Task RejectAndReleaseSeats_AllowsNewBookingForSameSeat()
 	{
 		// Arrange: единственное место занято.
-		var ev = CreateTestEvent(totalSeats: 1);
+		var ev = await CreateTestEvent(totalSeats: 1);
 		var first = await _sut.CreateBookingAsync(ev.Id);
 
-		var booking = _bookingStore.GetById(first.Id)!;
+		var booking = await _context.Bookings.FirstAsync(b => b.Id == first.Id);
 		booking.Reject(DateTime.UtcNow);
-		_bookingStore.Update(booking);
-		_eventStore.GetById(ev.Id)!.ReleaseSeats();
+		var entity = await _context.Events.FirstAsync(e => e.Id == ev.Id);
+		entity.ReleaseSeats();
+		await _context.SaveChangesAsync();
 
 		// Act: на освободившееся место можно создать новую бронь.
 		var second = await _sut.CreateBookingAsync(ev.Id);
@@ -193,7 +200,7 @@ public class BookingServiceTests
 		// Assert
 		second.Id.Should().NotBe(first.Id);
 		second.Status.Should().Be(BookingStatus.Pending);
-		_eventService.GetById(ev.Id).AvailableSeats.Should().Be(0);
+		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
 	}
 
 	// ---------- Неуспешные сценарии ----------
@@ -215,8 +222,8 @@ public class BookingServiceTests
 	public async Task CreateBookingAsync_ForDeletedEvent_ThrowsNotFound()
 	{
 		// Arrange
-		var ev = CreateTestEvent();
-		_eventService.Delete(ev.Id);
+		var ev = await CreateTestEvent();
+		await _eventService.DeleteAsync(ev.Id);
 
 		// Act
 		var act = async () => await _sut.CreateBookingAsync(ev.Id);
@@ -229,7 +236,7 @@ public class BookingServiceTests
 	public async Task CreateBookingAsync_WhenSeatsExhausted_ThrowsNoAvailableSeats()
 	{
 		// Arrange: исчерпываем единственное место.
-		var ev = CreateTestEvent(totalSeats: 1);
+		var ev = await CreateTestEvent(totalSeats: 1);
 		await _sut.CreateBookingAsync(ev.Id);
 
 		// Act: следующая попытка должна упасть с 409.
@@ -242,8 +249,8 @@ public class BookingServiceTests
 			.WithMessage("No available seats for this event");
 
 		// Лишняя бронь не создана, мест не появилось.
-		_bookingStore.GetAll().Should().HaveCount(1);
-		_eventService.GetById(ev.Id).AvailableSeats.Should().Be(0);
+		(await _context.Bookings.CountAsync()).Should().Be(1);
+		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
 	}
 
 	[Fact]

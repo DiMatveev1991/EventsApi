@@ -7,11 +7,12 @@ namespace EventsApi.Services
         /// <summary>
         /// Возвращает страницу событий с применёнными фильтрами.
         /// </summary>
-        PaginatedResult<EventDto> GetAll(EventQueryParameters query);
+        Task<PaginatedResult<EventDto>> GetAllAsync(
+            EventQueryParameters query, CancellationToken cancellationToken = default);
 
-        EventDto GetById(Guid id);
-        EventDto Create(CreateEventDto dto);
-        EventDto Update(Guid id, UpdateEventDto dto);
-        void Delete(Guid id);
+        Task<EventDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+        Task<EventDto> CreateAsync(CreateEventDto dto, CancellationToken cancellationToken = default);
+        Task<EventDto> UpdateAsync(Guid id, UpdateEventDto dto, CancellationToken cancellationToken = default);
+        Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
     }
 }

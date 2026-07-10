@@ -8,11 +8,18 @@ namespace EventsApi.Models
     /// </summary>
     public class Booking
     {
+        // Приватный конструктор без параметров нужен EF Core: провайдер создаёт
+        // экземпляры через рефлексию при чтении данных из БД.
+        private Booking() { }
+
         public Guid Id { get; set; }
         public Guid EventId { get; set; }
         public BookingStatus Status { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? ProcessedAt { get; set; }
+
+        /// <summary>Навигационное свойство: событие, к которому относится бронь.</summary>
+        public Event? Event { get; set; }
 
         /// <summary>
         /// Создаёт новую бронь в статусе Pending с сгенерированным Id и текущим UTC-временем.

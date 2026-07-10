@@ -22,12 +22,14 @@ namespace EventsApi.Controllers
 		/// Получить список мероприятий с фильтрацией и пагинацией.
 		/// </summary>
 		/// <param name="query">Параметры фильтрации (title, from, to) и пагинации (page, pageSize).</param>
+		/// <param name="cancellationToken">Токен отмены запроса.</param>
 		[HttpGet]
 		[ProducesResponseType(typeof(PaginatedResult<EventDto>), StatusCodes.Status200OK)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-		public ActionResult<PaginatedResult<EventDto>> GetAll([FromQuery] EventQueryParameters query)
+		public async Task<ActionResult<PaginatedResult<EventDto>>> GetAll(
+			[FromQuery] EventQueryParameters query, CancellationToken cancellationToken)
 		{
-			var result = _eventService.GetAll(query);
+			var result = await _eventService.GetAllAsync(query, cancellationToken);
 			return Ok(result);
 		}
 
@@ -35,9 +37,9 @@ namespace EventsApi.Controllers
 		[HttpGet("{id:guid}")]
 		[ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-		public ActionResult<EventDto> GetById(Guid id)
+		public async Task<ActionResult<EventDto>> GetById(Guid id, CancellationToken cancellationToken)
 		{
-			var ev = _eventService.GetById(id);
+			var ev = await _eventService.GetByIdAsync(id, cancellationToken);
 			return Ok(ev);
 		}
 
@@ -45,9 +47,10 @@ namespace EventsApi.Controllers
 		[HttpPost]
 		[ProducesResponseType(typeof(EventDto), StatusCodes.Status201Created)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-		public ActionResult<EventDto> Create([FromBody] CreateEventDto dto)
+		public async Task<ActionResult<EventDto>> Create(
+			[FromBody] CreateEventDto dto, CancellationToken cancellationToken)
 		{
-			var created = _eventService.Create(dto);
+			var created = await _eventService.CreateAsync(dto, cancellationToken);
 			return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
 		}
 
@@ -56,9 +59,10 @@ namespace EventsApi.Controllers
 		[ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-		public ActionResult<EventDto> Update(Guid id, [FromBody] UpdateEventDto dto)
+		public async Task<ActionResult<EventDto>> Update(
+			Guid id, [FromBody] UpdateEventDto dto, CancellationToken cancellationToken)
 		{
-			var updated = _eventService.Update(id, dto);
+			var updated = await _eventService.UpdateAsync(id, dto, cancellationToken);
 			return Ok(updated);
 		}
 
@@ -66,9 +70,9 @@ namespace EventsApi.Controllers
 		[HttpDelete("{id:guid}")]
 		[ProducesResponseType(StatusCodes.Status204NoContent)]
 		[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-		public IActionResult Delete(Guid id)
+		public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
 		{
-			_eventService.Delete(id);
+			await _eventService.DeleteAsync(id, cancellationToken);
 			return NoContent();
 		}
 
