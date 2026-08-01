@@ -1,6 +1,5 @@
-using EventsApi.DataAccess;
 using EventsApi.DTOs;
-using Microsoft.EntityFrameworkCore;
+using EventsApi.Repositories;
 
 namespace EventsApi.BackgroundServices
 {
@@ -10,11 +9,11 @@ namespace EventsApi.BackgroundServices
 	/// если событие к моменту обработки уже удалено или произошла непредвиденная ошибка.
 	/// </summary>
 	/// <remarks>
-	/// BackgroundService — синглтон, а <see cref="AppDbContext"/> — scoped, поэтому
-	/// зависимости получаем через <see cref="IServiceScopeFactory"/>: для каждой брони
-	/// создаётся свой scope со своим DbContext. Так как контексты не разделяются между
-	/// задачами, дополнительная синхронизация (семафор) не нужна — изоляцию обеспечивает
-	/// отдельный экземпляр контекста на каждую задачу.
+	/// BackgroundService — синглтон, а репозитории (и стоящий за ними AppDbContext) —
+	/// scoped, поэтому зависимости получаем через <see cref="IServiceScopeFactory"/>:
+	/// для каждой брони создаётся свой scope со своими репозиториями. Так как контексты
+	/// не разделяются между задачами, дополнительная синхронизация (семафор) не нужна —
+	/// изоляцию обеспечивает отдельный экземпляр контекста на каждую задачу.
 	/// </remarks>
 	public class BookingProcessor : BackgroundService
 	{
@@ -70,14 +69,11 @@ namespace EventsApi.BackgroundServices
 		private async Task ProcessPendingBatchAsync(CancellationToken stoppingToken)
 		{
 			// Отдельный scope для чтения идентификаторов Pending-броней; закрывается сразу.
-			List<Guid> pendingIds;
+			IReadOnlyList<Guid> pendingIds;
 			using (var scope = _scopeFactory.CreateScope())
 			{
-				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-				pendingIds = await db.Bookings
-					.Where(b => b.Status == BookingStatus.Pending)
-					.Select(b => b.Id)
-					.ToListAsync(stoppingToken);
+				var bookingRepository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
+				pendingIds = await bookingRepository.GetPendingIdsAsync(stoppingToken);
 			}
 
 			if (pendingIds.Count == 0)
@@ -99,22 +95,21 @@ namespace EventsApi.BackgroundServices
 				await Task.Delay(ProcessingDelay, stoppingToken);
 
 				using var scope = _scopeFactory.CreateScope();
-				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+				var bookingRepository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
+				var eventRepository = scope.ServiceProvider.GetRequiredService<IEventRepository>();
 
-				var booking = await db.Bookings
-					.FirstOrDefaultAsync(b => b.Id == bookingId, stoppingToken);
+				var booking = await bookingRepository.GetByIdAsync(bookingId, stoppingToken);
 
 				// Бронь могла быть удалена или уже обработана ранее.
 				if (booking is null || booking.Status != BookingStatus.Pending)
 					return;
 
-				var ev = await db.Events
-					.FirstOrDefaultAsync(e => e.Id == booking.EventId, stoppingToken);
+				var ev = await eventRepository.GetByIdAsync(booking.EventId, stoppingToken);
 
 				if (ev is null)
 				{
 					booking.Reject(DateTime.UtcNow);
-					await db.SaveChangesAsync(stoppingToken);
+					await bookingRepository.UpdateAsync(booking, stoppingToken);
 					_logger.LogWarning(
 						"Бронь {BookingId} отклонена: событие {EventId} больше не существует",
 						booking.Id, booking.EventId);
@@ -122,7 +117,7 @@ namespace EventsApi.BackgroundServices
 				}
 
 				booking.Confirm(DateTime.UtcNow);
-				await db.SaveChangesAsync(stoppingToken);
+				await bookingRepository.UpdateAsync(booking, stoppingToken);
 				_logger.LogInformation("Бронь {BookingId} подтверждена", booking.Id);
 			}
 			catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -142,28 +137,28 @@ namespace EventsApi.BackgroundServices
 
 		/// <summary>
 		/// Отклоняет бронь после непредвиденной ошибки и возвращает место в пул события.
-		/// Работает в собственном scope; и бронь, и событие сохраняются одним SaveChanges.
+		/// Работает в собственном scope; бронь и событие получены через репозитории,
+		/// делящие один контекст, поэтому сохраняются одной транзакцией.
 		/// </summary>
 		private async Task RejectAndReleaseSeatAsync(Guid bookingId)
 		{
 			try
 			{
 				using var scope = _scopeFactory.CreateScope();
-				var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+				var bookingRepository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
+				var eventRepository = scope.ServiceProvider.GetRequiredService<IEventRepository>();
 
-				var booking = await db.Bookings
-					.FirstOrDefaultAsync(b => b.Id == bookingId);
+				var booking = await bookingRepository.GetByIdAsync(bookingId);
 				if (booking is null)
 					return;
 
 				if (booking.Status == BookingStatus.Pending)
 					booking.Reject(DateTime.UtcNow);
 
-				var ev = await db.Events
-					.FirstOrDefaultAsync(e => e.Id == booking.EventId);
+				var ev = await eventRepository.GetByIdAsync(booking.EventId);
 				ev?.ReleaseSeats();
 
-				await db.SaveChangesAsync();
+				await bookingRepository.UpdateAsync(booking);
 
 				_logger.LogWarning(
 					"Бронь {BookingId} отклонена из-за ошибки обработки, место возвращено в пул",

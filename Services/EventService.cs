@@ -1,18 +1,17 @@
-using EventsApi.DataAccess;
 using EventsApi.DTOs;
 using EventsApi.Exceptions;
 using EventsApi.Models;
-using Microsoft.EntityFrameworkCore;
+using EventsApi.Repositories;
 
 namespace EventsApi.Services
 {
 	public class EventService : IEventService
 	{
-		private readonly AppDbContext _context;
+		private readonly IEventRepository _repository;
 
-		public EventService(AppDbContext context)
+		public EventService(IEventRepository repository)
 		{
-			_context = context;
+			_repository = repository;
 		}
 
 		public async Task<PaginatedResult<EventDto>> GetAllAsync(
@@ -24,40 +23,13 @@ namespace EventsApi.Services
 			var page = query.Page < 1 ? 1 : query.Page;
 			var pageSize = query.PageSize < 1 ? 10 : query.PageSize;
 
-			IQueryable<Event> source = _context.Events.AsNoTracking();
-
-			// Фильтр по названию — регистронезависимое частичное совпадение.
-			if (!string.IsNullOrWhiteSpace(query.Title))
-			{
-				var title = query.Title.Trim().ToLower();
-				source = source.Where(e => e.Title.ToLower().Contains(title));
-			}
-
-			// from: событие должно НАЧИНАТЬСЯ не раньше указанной даты.
-			if (query.From.HasValue)
-			{
-				var from = query.From.Value;
-				source = source.Where(e => e.StartAt >= from);
-			}
-
-			// to: событие должно ЗАКАНЧИВАТЬСЯ не позже указанной даты.
-			if (query.To.HasValue)
-			{
-				var to = query.To.Value;
-				source = source.Where(e => e.EndAt <= to);
-			}
-
-			// Стабильная сортировка, чтобы пагинация была детерминированной.
-			var ordered = source
-				.OrderBy(e => e.StartAt)
-				.ThenBy(e => e.Id);
-
-			var totalCount = await ordered.CountAsync(cancellationToken);
-
-			var events = await ordered
-				.Skip((page - 1) * pageSize)
-				.Take(pageSize)
-				.ToListAsync(cancellationToken);
+			var (events, totalCount) = await _repository.GetPagedAsync(
+				query.Title,
+				query.From,
+				query.To,
+				(page - 1) * pageSize,
+				pageSize,
+				cancellationToken);
 
 			var items = events.Select(MapToDto).ToList();
 
@@ -66,9 +38,7 @@ namespace EventsApi.Services
 
 		public async Task<EventDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
 		{
-			var ev = await _context.Events
-				.AsNoTracking()
-				.FirstOrDefaultAsync(e => e.Id == id, cancellationToken)
+			var ev = await _repository.GetByIdAsync(id, cancellationToken)
 				?? throw NotFoundException.ForEvent(id);
 			return MapToDto(ev);
 		}
@@ -95,8 +65,7 @@ namespace EventsApi.Services
 				dto.EndAt,
 				dto.TotalSeats.Value);
 
-			_context.Events.Add(ev);
-			await _context.SaveChangesAsync(cancellationToken);
+			await _repository.AddAsync(ev, cancellationToken);
 
 			return MapToDto(ev);
 		}
@@ -106,8 +75,7 @@ namespace EventsApi.Services
 			ArgumentNullException.ThrowIfNull(dto);
 			ValidateWrite(dto);
 
-			var ev = await _context.Events
-				.FirstOrDefaultAsync(e => e.Id == id, cancellationToken)
+			var ev = await _repository.GetByIdAsync(id, cancellationToken)
 				?? throw NotFoundException.ForEvent(id);
 
 			ev.Title = dto.Title.Trim();
@@ -115,19 +83,17 @@ namespace EventsApi.Services
 			ev.StartAt = dto.StartAt;
 			ev.EndAt = dto.EndAt;
 
-			await _context.SaveChangesAsync(cancellationToken);
+			await _repository.UpdateAsync(ev, cancellationToken);
 
 			return MapToDto(ev);
 		}
 
 		public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
 		{
-			var ev = await _context.Events
-				.FirstOrDefaultAsync(e => e.Id == id, cancellationToken)
+			var ev = await _repository.GetByIdAsync(id, cancellationToken)
 				?? throw NotFoundException.ForEvent(id);
 
-			_context.Events.Remove(ev);
-			await _context.SaveChangesAsync(cancellationToken);
+			await _repository.DeleteAsync(ev, cancellationToken);
 		}
 
 		/// <summary>
