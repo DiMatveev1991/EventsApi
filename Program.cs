@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using EventsApi.BackgroundServices;
 using EventsApi.DataAccess;
 using EventsApi.Middleware;
+using EventsApi.Repositories;
 using EventsApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +14,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<AppDbContext>(options =>
 	options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Сервисы приложения — scoped, т. к. зависят от scoped-контекста AppDbContext.
+// Репозитории — scoped: делят scoped-контекст AppDbContext в пределах запроса.
+builder.Services.AddScoped<IEventRepository, EventRepository>();
+builder.Services.AddScoped<IBookingRepository, BookingRepository>();
+
+// Сервисы приложения — scoped, т. к. зависят от scoped-репозиториев.
 builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
 
@@ -77,11 +82,12 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// Создаём схему БД при старте, если её ещё нет (EnsureCreated не использует миграции).
+// Применяем миграции EF Core при старте: схема БД (таблицы events, bookings и связи)
+// создаётся и обновляется миграциями, а не EnsureCreated().
 using (var scope = app.Services.CreateScope())
 {
 	var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-	db.Database.EnsureCreated();
+	db.Database.Migrate();
 }
 
 // Middleware должен стоять раньше всех остальных, чтобы ловить любые исключения.
