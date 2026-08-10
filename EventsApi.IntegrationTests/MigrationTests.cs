@@ -30,6 +30,7 @@ namespace EventsApi.IntegrationTests
             // Assert
             tables.Should().Contain("events");
             tables.Should().Contain("bookings");
+            tables.Should().Contain("users");
         }
 
         [Fact]
@@ -44,6 +45,7 @@ namespace EventsApi.IntegrationTests
             // Assert
             applied.Should().Contain(m => m.EndsWith("InitialCreate"));
             applied.Should().Contain(m => m.EndsWith("UseUtcEventTimestamps"));
+            applied.Should().Contain(m => m.EndsWith("AddUsersAndBookingOwnership"));
             (await ctx.Database.GetPendingMigrationsAsync()).Should().BeEmpty();
         }
 
@@ -88,7 +90,7 @@ namespace EventsApi.IntegrationTests
             await using var ctx = CreateContext();
 
             // Act — читаем реальные ограничения внешнего ключа из системного каталога
-            var fk = await QuerySingleAsync(ctx,
+            var foreignKeys = await QueryStringsAsync(ctx,
                 "SELECT tc.constraint_name || ':' || ccu.table_name || '.' || ccu.column_name " +
                 "FROM information_schema.table_constraints tc " +
                 "JOIN information_schema.constraint_column_usage ccu " +
@@ -96,8 +98,8 @@ namespace EventsApi.IntegrationTests
                 "WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = 'bookings';");
 
             // Assert — внешний ключ ссылается на events.Id
-            fk.Should().NotBeNull();
-            fk!.Should().Contain("events.Id");
+            foreignKeys.Should().Contain(value => value.Contains("events.Id"));
+            foreignKeys.Should().Contain(value => value.Contains("users.Id"));
         }
 
         [Fact]
@@ -112,6 +114,18 @@ namespace EventsApi.IntegrationTests
 
             // Assert
             indexes.Should().Contain("IX_bookings_EventId");
+            indexes.Should().Contain("IX_bookings_UserId");
+        }
+
+        [Fact]
+        public async Task Migration_creates_unique_index_on_user_login()
+        {
+            await using var ctx = CreateContext();
+
+            var indexes = await QueryStringsAsync(ctx,
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'users';");
+
+            indexes.Should().Contain("IX_users_Login");
         }
 
         private static async Task<List<string>> QueryStringsAsync(DbContext ctx, string sql)
@@ -135,10 +149,5 @@ namespace EventsApi.IntegrationTests
             return results;
         }
 
-        private static async Task<string?> QuerySingleAsync(DbContext ctx, string sql)
-        {
-            var rows = await QueryStringsAsync(ctx, sql);
-            return rows.FirstOrDefault();
-        }
     }
 }

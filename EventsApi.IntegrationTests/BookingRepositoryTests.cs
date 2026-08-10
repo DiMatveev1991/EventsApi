@@ -22,7 +22,7 @@ namespace EventsApi.IntegrationTests
         {
             // Arrange
             var ev = await SeedEventAsync(TestData.Event(totalSeats: 10));
-            var booking = Booking.CreatePending(ev.Id);
+            var booking = Booking.CreatePending(ev.Id, Guid.Empty);
 
             // Act
             await using (var ctx = CreateContext())
@@ -57,7 +57,7 @@ namespace EventsApi.IntegrationTests
                 var tracked = await eventRepository.GetByIdAsync(ev.Id);
                 tracked!.TryReserveSeats().Should().BeTrue();
 
-                await bookingRepository.AddAsync(Booking.CreatePending(ev.Id));
+                await bookingRepository.AddAsync(Booking.CreatePending(ev.Id, Guid.Empty));
             }
 
             // Assert — и бронь сохранена, и AvailableSeats уменьшилось
@@ -87,7 +87,7 @@ namespace EventsApi.IntegrationTests
         {
             // Arrange
             var ev = await SeedEventAsync(TestData.Event(totalSeats: 3));
-            var booking = Booking.CreatePending(ev.Id);
+            var booking = Booking.CreatePending(ev.Id, Guid.Empty);
             await using (var ctx = CreateContext())
             {
                 await new BookingRepository(ctx).AddAsync(booking);
@@ -117,11 +117,11 @@ namespace EventsApi.IntegrationTests
         {
             // Arrange
             var ev = await SeedEventAsync(TestData.Event(totalSeats: 10));
-            var pending1 = Booking.CreatePending(ev.Id);
-            var pending2 = Booking.CreatePending(ev.Id);
-            var confirmed = Booking.CreatePending(ev.Id);
+            var pending1 = Booking.CreatePending(ev.Id, Guid.Empty);
+            var pending2 = Booking.CreatePending(ev.Id, Guid.Empty);
+            var confirmed = Booking.CreatePending(ev.Id, Guid.Empty);
             confirmed.Confirm(DateTime.UtcNow);
-            var rejected = Booking.CreatePending(ev.Id);
+            var rejected = Booking.CreatePending(ev.Id, Guid.Empty);
             rejected.Reject(DateTime.UtcNow);
 
             await using (var ctx = CreateContext())
@@ -142,7 +142,7 @@ namespace EventsApi.IntegrationTests
         public async Task AddAsync_violates_foreign_key_when_event_does_not_exist()
         {
             // Arrange — бронь ссылается на несуществующее событие
-            var booking = Booking.CreatePending(Guid.NewGuid());
+            var booking = Booking.CreatePending(Guid.NewGuid(), Guid.Empty);
 
             // Act
             await using var ctx = CreateContext();

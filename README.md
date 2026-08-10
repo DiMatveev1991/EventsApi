@@ -4,6 +4,30 @@ REST API для управления мероприятиями, построе�
 управляется миграциями EF Core, а слой доступа к данным вынесен в репозитории
 и покрыт интеграционными тестами на реальной PostgreSQL через Testcontainers.
 
+## Авторизация и роли (Sprint 8)
+
+API использует JWT Bearer Authentication. Пользователь регистрируется через
+`POST /auth/register`, затем получает токен через `POST /auth/login`. Пароли в БД
+не хранятся: сохраняется только SHA-256-хеш. Секрет подписи JWT обязательно передаётся
+из переменной окружения и отсутствует в `appsettings*.json`.
+
+Роли:
+
+- `User` — просматривает события, создаёт брони и отменяет только свои брони;
+- `Admin` — дополнительно создаёт, изменяет и удаляет события, а также может отменить
+  любую бронь.
+
+Защищённые эндпоинты ожидают заголовок `Authorization: Bearer <token>`. В Swagger UI
+можно нажать **Authorize** и вставить JWT без префикса `Bearer`.
+
+Правила бронирования:
+
+- нельзя бронировать событие, которое уже началось (`400 Bad Request`);
+- у пользователя может быть не более 10 активных броней (`Pending` или `Confirmed`),
+  превышение возвращает `409 Conflict` с указанием лимита;
+- отменённая бронь получает статус `Cancelled`, место возвращается событию;
+- попытка отменить чужую бронь без роли `Admin` возвращает `403 Forbidden`.
+
 Решение организовано по принципам **чистой архитектуры (Clean Architecture)** и
 разделено на четыре отдельных проекта (сборки) — `EventsApi.Domain`,
 `EventsApi.Application`, `EventsApi.Infrastructure`, `EventsApi.Presentation`.
@@ -48,11 +72,12 @@ services:
 `appsettings.json`):
 ```bash
 export ConnectionStrings__DefaultConnection='Host=localhost;Port=5432;Database=eventapi;Username=postgres;Password=<password>'
+export Jwt__Secret='<случайная строка длиной не менее 32 байт>'
 ```
 Для локального профиля `Development` также используйте env-переменную или
 `dotnet user-secrets`; credentials в файлах `appsettings*.json` не хранятся.
 
-Схема БД (таблицы `events` и `bookings` и связь между ними) создаётся и обновляется
+Схема БД (таблицы `events`, `bookings`, `users` и связи между ними) создаётся и обновляется
 **миграциями EF Core**, а не `EnsureCreated()`. Приложение при старте автоматически
 применяет все ещё не применённые миграции методом `MigrateWithLegacyBaselineAsync()` (см. раздел
 «Миграции базы данных»).
@@ -74,11 +99,33 @@ HTTP: `http://localhost:5134`
 HTTPS: `https://localhost:7201`
 Swagger UI
 Откройте в браузере: `http://localhost:5134/swagger`
+
+Основные auth-запросы:
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{"login":"dmitry","password":"Password123!","role":"User"}
+```
+
+Успешная регистрация возвращает `204 No Content`. Вход:
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{"login":"dmitry","password":"Password123!"}
+```
+
+Ответ `200 OK`: `{"token":"<jwt>"}`. Для неверного логина и неверного пароля API
+возвращает одинаковый `404 Not Found`, не раскрывая существование пользователя.
 Миграции базы данных
 Схема БД управляется миграциями EF Core. Миграции и `AppDbContext` находятся в слое
 **Infrastructure**. Начальная миграция `InitialCreate`
-(папка `src/EventsApi.Infrastructure/Persistence/Migrations`) создаёт таблицы `events`,
-`bookings` и внешний ключ `bookings.EventId → events.Id` (`ON DELETE CASCADE`).
+(папка `src/EventsApi.Infrastructure/Persistence/Migrations`) создаёт таблицы `events`
+и `bookings`. Миграция `AddUsersAndBookingOwnership` добавляет `users`, уникальный индекс
+по `Login` и внешний ключ `bookings.UserId → users.Id`.
 
 Применение миграций при старте приложения (composition root, `Program.cs` в Presentation):
 ```csharp
@@ -166,8 +213,9 @@ dotnet test EventsApi.IntegrationTests/EventsApi.IntegrationTests.csproj
 и независимость тестов от порядка запуска, а также проверяет применимость миграций.
 
 Что покрыто:
-`MigrationTests` — миграции создают таблицы `events` и `bookings`, внешний ключ
-`bookings → events`, индекс по `EventId`, а сама миграция фиксируется в
+`MigrationTests` — миграции создают таблицы `events`, `bookings`, `users`, внешние ключи
+`bookings → events/users`, индексы по `EventId`, `UserId` и уникальный индекс логина;
+сама миграция фиксируется в
 `__EFMigrationsHistory` (нет ожидающих применения миграций).
 `EventRepositoryTests` — все методы `EventRepository`: добавление, чтение по Id
 (в т. ч. `null` для отсутствующего), обновление полей, удаление с каскадным удалением
@@ -232,7 +280,8 @@ EventsApi/
 │   │   │   ├── Event.cs                         # + навигация Bookings, TryReserveSeats/ReleaseSeats
 │   │   │   └── Booking.cs                       # + навигация Event, Confirm/Reject
 │   │   ├── Enums/
-│   │   │   └── BookingStatus.cs                 # Pending / Confirmed / Rejected
+│   │   │   ├── BookingStatus.cs                 # Pending / Confirmed / Rejected / Cancelled
+│   │   │   └── UserRole.cs                      # User / Admin
 │   │   └── Exceptions/
 │   │       └── AppException.cs                  # NotFoundException, ValidationException, NoAvailableSeatsException
 │   │
@@ -310,8 +359,8 @@ EventsApi/
 и `HasMaxLength()` для строк, связь «один–ко–многим» с `Booking` через навигационные свойства.
 
 `BookingConfiguration` — таблица `bookings`, первичный ключ по `Id` с `ValueGeneratedNever()`,
-`Status` хранится строкой через `HasConversion<string>()`, связь с `Event` через
-`HasOne`/`WithMany` и внешний ключ `EventId` с каскадным удалением.
+`Status` хранится строкой через `HasConversion<string>()`, настроены связи с `Event`
+и `User` через внешние ключи `EventId` и `UserId`.
 
 Сущности `Event` и `Booking` имеют приватный конструктор без параметров — он нужен EF Core
 для создания экземпляров через рефлексию при чтении данных из БД, а также навигационные
@@ -361,7 +410,8 @@ scoped-репозиториями и своим `AppDbContext`.
 Поле	Тип	Обязательное	Описание
 `id`	`guid`	—	Уникальный идентификатор брони
 `eventId`	`guid`	да	Идентификатор события
-`status`	`BookingStatus`	да	Текущий статус (`Pending`/`Confirmed`/`Rejected`)
+`userId`	`guid`	да	Идентификатор владельца брони
+`status`	`BookingStatus`	да	Текущий статус (`Pending`/`Confirmed`/`Rejected`/`Cancelled`)
 `createdAt`	`datetime`	да	Время создания брони (UTC)
 `processedAt`	`datetime?`	нет	Время обработки фоновым сервисом (UTC)
 Статусы (`BookingStatus`):
@@ -369,7 +419,8 @@ scoped-репозиториями и своим `AppDbContext`.
 `Pending`	Бронь создана, ожидает обработки фоновым сервисом
 `Confirmed`	Бронь подтверждена
 `Rejected`	Бронь отклонена (например, событие было удалено)
-> В JSON-ответах API статусы сериализуются строкой (`"Pending"`, `"Confirmed"`, `"Rejected"`)
+`Cancelled`	Бронь отменена пользователем или администратором
+> В JSON-ответах API статусы сериализуются строкой (`"Pending"`, `"Confirmed"`, `"Rejected"`, `"Cancelled"`)
 > благодаря `JsonStringEnumConverter`. То же видно в Swagger UI.
 > В таблице `bookings` статус тоже хранится строкой (`HasConversion<string>()`).
 Эндпоинты — события
@@ -384,14 +435,15 @@ Query-параметры:
 `GET /events/{id}` — мероприятие по ID
 `200 OK` / `404 Not Found`
 `POST /events` — создание
-`201 Created` / `400 Bad Request` (в т. ч. если `totalSeats` отсутствует или не больше нуля)
+Только `Admin`: `201 Created` / `400 Bad Request` / `401 Unauthorized` / `403 Forbidden`.
 `PUT /events/{id}` — полное обновление
-`200 OK` / `400 Bad Request` / `404 Not Found`
+Только `Admin`: `200 OK` / `400 Bad Request` / `404 Not Found`.
 `DELETE /events/{id}`
-`204 No Content` / `404 Not Found`
+Только `Admin`: `204 No Content` / `404 Not Found`.
 Эндпоинты — бронирования
 `POST /events/{id}/book` — создать бронь
 Создаёт бронь для указанного события. Реализует паттерн «быстрый ответ + отложенная обработка»: эндпоинт мгновенно возвращает созданную бронь в статусе `Pending`, а её обработка выполняется фоновым сервисом. Каждая успешная бронь атомарно резервирует одно место (`availableSeats` уменьшается на 1).
+Требуется JWT; `UserId` берётся из claims токена, а не из тела запроса.
 Ответ `202 Accepted`:
 ```http
 HTTP/1.1 202 Accepted
@@ -401,6 +453,7 @@ Content-Type: application/json
 {
   "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "eventId": "11111111-2222-3333-4444-555555555555",
+  "userId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   "status": "Pending",
   "createdAt": "2025-09-15T12:00:00Z",
   "processedAt": null
@@ -408,10 +461,14 @@ Content-Type: application/json
 ```
 `202 Accepted` — бронь принята в обработку, заголовок `Location` указывает на ресурс брони
 `404 Not Found` — событие с указанным `id` не существует
-`409 Conflict` — на событии не осталось свободных мест (`availableSeats = 0`)
+`400 Bad Request` — событие уже началось
+`409 Conflict` — нет мест или достигнут лимит 10 активных броней
 `GET /bookings/{id}` — получить текущее состояние брони
+Требуется JWT.
 `200 OK` — возвращает актуальную информацию о брони (включая текущий `status` и `processedAt`)
 `404 Not Found` — бронь не найдена
+`DELETE /bookings/{id}` — отменить бронь. Пользователь отменяет только свою бронь,
+администратор — любую. Успех: `204 No Content`; чужая бронь: `403 Forbidden`.
 Пример ответа после обработки:
 ```json
 {
@@ -454,28 +511,32 @@ Singleton `EventBookingLock` хранит отдельный `SemaphoreSlim(1, 1
 ```bash
 # 1. Создаём событие
 curl -X POST http://localhost:5134/events \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Митап по C#",
     "description": "Обсуждаем .NET",
-    "startAt": "2025-09-15T18:00:00Z",
-    "endAt":   "2025-09-15T20:00:00Z",
+    "startAt": "2030-09-15T18:00:00Z",
+    "endAt":   "2030-09-15T20:00:00Z",
     "totalSeats": 50
   }'
 # → 201 Created, в теле объект события с id
 
 # 2. Создаём бронь
-curl -i -X POST http://localhost:5134/events/<event-id>/book
+curl -i -X POST http://localhost:5134/events/<event-id>/book \
+  -H "Authorization: Bearer $USER_TOKEN"
 # → 202 Accepted
 #   Location: /bookings/<booking-id>
 #   В теле бронь со status="Pending"
 
 # 3. Сразу проверяем статус
-curl http://localhost:5134/bookings/<booking-id>
+curl http://localhost:5134/bookings/<booking-id> \
+  -H "Authorization: Bearer $USER_TOKEN"
 # → 200 OK, status="Pending"
 
 # 4. Ждём ~3 секунды и повторяем запрос
-sleep 3 && curl http://localhost:5134/bookings/<booking-id>
+sleep 3 && curl http://localhost:5134/bookings/<booking-id> \
+  -H "Authorization: Bearer $USER_TOKEN"
 # → 200 OK, status="Confirmed", processedAt заполнено
 ```
 Данные сохраняются в PostgreSQL и доступны после перезапуска приложения.
@@ -483,17 +544,18 @@ sleep 3 && curl http://localhost:5134/bookings/<booking-id>
 ```bash
 # 1. Создаём событие на 3 места
 curl -X POST http://localhost:5134/events \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{ "title": "Маленький зал", "startAt": "2025-09-15T18:00:00Z", "endAt": "2025-09-15T20:00:00Z", "totalSeats": 3 }'
+  -d '{ "title": "Маленький зал", "startAt": "2030-09-15T18:00:00Z", "endAt": "2030-09-15T20:00:00Z", "totalSeats": 3 }'
 # → 201 Created, totalSeats=3, availableSeats=3
 
 # 2. Создаём три брони — все успешны
-curl -i -X POST http://localhost:5134/events/<event-id>/book   # → 202 Accepted
-curl -i -X POST http://localhost:5134/events/<event-id>/book   # → 202 Accepted
-curl -i -X POST http://localhost:5134/events/<event-id>/book   # → 202 Accepted
+curl -i -X POST http://localhost:5134/events/<event-id>/book -H "Authorization: Bearer $USER_TOKEN"   # → 202
+curl -i -X POST http://localhost:5134/events/<event-id>/book -H "Authorization: Bearer $USER_TOKEN"   # → 202
+curl -i -X POST http://localhost:5134/events/<event-id>/book -H "Authorization: Bearer $USER_TOKEN"   # → 202
 
 # 3. Четвёртая бронь — мест больше нет
-curl -i -X POST http://localhost:5134/events/<event-id>/book
+curl -i -X POST http://localhost:5134/events/<event-id>/book -H "Authorization: Bearer $USER_TOKEN"
 # → 409 Conflict, detail: "No available seats for this event"
 
 # 4. Проверяем событие — свободных мест не осталось

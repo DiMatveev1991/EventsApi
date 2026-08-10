@@ -97,6 +97,24 @@ namespace EventsApi.Presentation.Middleware
                     nase.Message,
                     null),
 
+                ActiveBookingLimitExceededException able => (
+                    able.StatusCode,
+                    "Конфликт",
+                    able.Message,
+                    null),
+
+                ForbiddenException fe => (
+                    fe.StatusCode,
+                    "Доступ запрещён",
+                    fe.Message,
+                    null),
+
+                EventAlreadyStartedException ease => (
+                    ease.StatusCode,
+                    "Событие уже началось",
+                    ease.Message,
+                    null),
+
                 AppException ae => (
                     ae.StatusCode,
                     "Ошибка приложения",

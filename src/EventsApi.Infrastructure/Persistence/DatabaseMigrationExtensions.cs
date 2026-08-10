@@ -42,6 +42,20 @@ public static class DatabaseMigrationExtensions
                 INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
                 VALUES ('20260710112520_InitialCreate', '8.0.11')
                 ON CONFLICT ("MigrationId") DO NOTHING;
+
+                IF to_regclass('public.users') IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                       FROM information_schema.columns
+                       WHERE table_schema = 'public'
+                         AND table_name = 'bookings'
+                         AND column_name = 'UserId'
+                   )
+                THEN
+                    INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+                    VALUES ('20260810233000_AddUsersAndBookingOwnership', '8.0.11')
+                    ON CONFLICT ("MigrationId") DO NOTHING;
+                END IF;
             END IF;
         END
         $baseline$;

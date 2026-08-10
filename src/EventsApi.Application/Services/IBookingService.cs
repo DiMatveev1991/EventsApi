@@ -13,7 +13,10 @@ namespace EventsApi.Application.Services
         /// <exception cref="EventsApi.Domain.Exceptions.NotFoundException">
         /// Событие с указанным идентификатором не существует.
         /// </exception>
-        Task<BookingDto> CreateBookingAsync(Guid eventId, CancellationToken cancellationToken = default);
+        Task<BookingDto> CreateBookingAsync(
+            Guid eventId,
+            Guid userId,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Возвращает текущее состояние брони.
@@ -22,5 +25,12 @@ namespace EventsApi.Application.Services
         /// Бронь с указанным идентификатором не существует.
         /// </exception>
         Task<BookingDto> GetBookingByIdAsync(Guid bookingId, CancellationToken cancellationToken = default);
+
+        /// <summary>Отменяет собственную бронь; администратор может отменить любую.</summary>
+        Task CancelBookingAsync(
+            Guid bookingId,
+            Guid currentUserId,
+            bool isAdmin,
+            CancellationToken cancellationToken = default);
     }
 }

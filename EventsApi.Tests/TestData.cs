@@ -14,8 +14,8 @@ internal static class TestData
         {
             Title = title,
             Description = description,
-            StartAt = startAt ?? new DateTimeOffset(2025, 06, 01, 10, 00, 00, TimeSpan.Zero),
-            EndAt = endAt ?? new DateTimeOffset(2025, 06, 01, 18, 00, 00, TimeSpan.Zero),
+            StartAt = startAt ?? new DateTimeOffset(2030, 06, 01, 10, 00, 00, TimeSpan.Zero),
+            EndAt = endAt ?? new DateTimeOffset(2030, 06, 01, 18, 00, 00, TimeSpan.Zero),
             TotalSeats = totalSeats
         };
 
@@ -28,8 +28,8 @@ internal static class TestData
         {
             Title = title,
             Description = description,
-            StartAt = startAt ?? new DateTimeOffset(2025, 07, 01, 10, 00, 00, TimeSpan.Zero),
-            EndAt = endAt ?? new DateTimeOffset(2025, 07, 01, 18, 00, 00, TimeSpan.Zero)
+            StartAt = startAt ?? new DateTimeOffset(2030, 07, 01, 10, 00, 00, TimeSpan.Zero),
+            EndAt = endAt ?? new DateTimeOffset(2030, 07, 01, 18, 00, 00, TimeSpan.Zero)
         };
 
     public static EventQueryParameters Query(

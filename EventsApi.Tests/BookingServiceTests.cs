@@ -16,6 +16,7 @@ public sealed class BookingServiceTests
 {
     private readonly InMemoryEventRepository _events = new();
     private readonly InMemoryBookingRepository _bookings = new();
+    private readonly Guid _userId = Guid.NewGuid();
     private readonly BookingService _sut;
 
     public BookingServiceTests()
@@ -28,10 +29,11 @@ public sealed class BookingServiceTests
     {
         var ev = AddEvent();
 
-        var booking = await _sut.CreateBookingAsync(ev.Id);
+        var booking = await _sut.CreateBookingAsync(ev.Id, _userId);
 
         booking.Id.Should().NotBe(Guid.Empty);
         booking.EventId.Should().Be(ev.Id);
+        booking.UserId.Should().Be(_userId);
         booking.Status.Should().Be(BookingStatus.Pending);
         booking.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
         booking.ProcessedAt.Should().BeNull();
@@ -42,7 +44,7 @@ public sealed class BookingServiceTests
     {
         var ev = AddEvent();
 
-        var created = await _sut.CreateBookingAsync(ev.Id);
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
 
         (await _bookings.GetByIdAsync(created.Id)).Should().NotBeNull();
     }
@@ -52,8 +54,8 @@ public sealed class BookingServiceTests
     {
         var ev = AddEvent(totalSeats: 3);
 
-        await _sut.CreateBookingAsync(ev.Id);
-        await _sut.CreateBookingAsync(ev.Id);
+        await _sut.CreateBookingAsync(ev.Id, _userId);
+        await _sut.CreateBookingAsync(ev.Id, _userId);
 
         ev.AvailableSeats.Should().Be(1);
     }
@@ -65,9 +67,9 @@ public sealed class BookingServiceTests
 
         var bookings = new[]
         {
-            await _sut.CreateBookingAsync(ev.Id),
-            await _sut.CreateBookingAsync(ev.Id),
-            await _sut.CreateBookingAsync(ev.Id)
+            await _sut.CreateBookingAsync(ev.Id, _userId),
+            await _sut.CreateBookingAsync(ev.Id, _userId),
+            await _sut.CreateBookingAsync(ev.Id, _userId)
         };
 
         bookings.Select(booking => booking.Id).Should().OnlyHaveUniqueItems();
@@ -79,7 +81,7 @@ public sealed class BookingServiceTests
     public async Task GetBookingByIdAsync_ExistingBooking_ReturnsCurrentState()
     {
         var ev = AddEvent();
-        var created = await _sut.CreateBookingAsync(ev.Id);
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
         var entity = await _bookings.GetByIdAsync(created.Id);
         entity!.Confirm(DateTime.UtcNow);
 
@@ -93,10 +95,10 @@ public sealed class BookingServiceTests
     public async Task ReleaseSeats_AllowsNewBookingForSameSeat()
     {
         var ev = AddEvent(totalSeats: 1);
-        var first = await _sut.CreateBookingAsync(ev.Id);
+        var first = await _sut.CreateBookingAsync(ev.Id, _userId);
         ev.ReleaseSeats();
 
-        var second = await _sut.CreateBookingAsync(ev.Id);
+        var second = await _sut.CreateBookingAsync(ev.Id, _userId);
 
         second.Id.Should().NotBe(first.Id);
         ev.AvailableSeats.Should().Be(0);
@@ -107,7 +109,7 @@ public sealed class BookingServiceTests
     {
         var unknownEventId = Guid.NewGuid();
 
-        var act = async () => await _sut.CreateBookingAsync(unknownEventId);
+        var act = async () => await _sut.CreateBookingAsync(unknownEventId, _userId);
 
         await act.Should()
             .ThrowAsync<NotFoundException>()
@@ -121,7 +123,7 @@ public sealed class BookingServiceTests
         var ev = AddEvent();
         await _events.DeleteAsync(ev);
 
-        var act = async () => await _sut.CreateBookingAsync(ev.Id);
+        var act = async () => await _sut.CreateBookingAsync(ev.Id, _userId);
 
         await act.Should().ThrowAsync<NotFoundException>();
     }
@@ -130,9 +132,9 @@ public sealed class BookingServiceTests
     public async Task CreateBookingAsync_WhenSeatsExhausted_ThrowsAndDoesNotPersist()
     {
         var ev = AddEvent(totalSeats: 1);
-        await _sut.CreateBookingAsync(ev.Id);
+        await _sut.CreateBookingAsync(ev.Id, _userId);
 
-        var act = async () => await _sut.CreateBookingAsync(ev.Id);
+        var act = async () => await _sut.CreateBookingAsync(ev.Id, _userId);
 
         await act.Should()
             .ThrowAsync<NoAvailableSeatsException>()
@@ -153,13 +155,92 @@ public sealed class BookingServiceTests
             .Where(exception => exception.Message.Contains(unknownBookingId.ToString()));
     }
 
-    private Event AddEvent(int totalSeats = 10)
+    [Fact]
+    public async Task CreateBookingAsync_WhenEventAlreadyStarted_ThrowsBadRequest()
     {
+        var ev = AddEvent(startAt: DateTimeOffset.UtcNow.AddHours(-2));
+
+        var act = async () => await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        await act.Should()
+            .ThrowAsync<EventAlreadyStartedException>()
+            .Where(exception => exception.StatusCode == 400);
+    }
+
+    [Fact]
+    public async Task CreateBookingAsync_WhenActiveLimitReached_ThrowsConflictWithLimit()
+    {
+        var ev = AddEvent(totalSeats: 20);
+        for (var i = 0; i < BookingService.MaxActiveBookingsPerUser; i++)
+            await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        var act = async () => await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        await act.Should()
+            .ThrowAsync<ActiveBookingLimitExceededException>()
+            .Where(exception => exception.StatusCode == 409)
+            .Where(exception => exception.Message.Contains("10"));
+    }
+
+    [Fact]
+    public async Task CancelBookingAsync_ForOwner_CancelsAndReleasesSeat()
+    {
+        var ev = AddEvent(totalSeats: 1);
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        await _sut.CancelBookingAsync(created.Id, _userId, isAdmin: false);
+
+        (await _bookings.GetByIdAsync(created.Id))!.Status.Should().Be(BookingStatus.Cancelled);
+        ev.AvailableSeats.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CancelBookingAsync_ForAnotherUsersBooking_ThrowsForbidden()
+    {
+        var ev = AddEvent();
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        var act = async () => await _sut.CancelBookingAsync(
+            created.Id,
+            Guid.NewGuid(),
+            isAdmin: false);
+
+        await act.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    [Fact]
+    public async Task CancelBookingAsync_AdminCanCancelAnotherUsersBooking()
+    {
+        var ev = AddEvent();
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        await _sut.CancelBookingAsync(created.Id, Guid.NewGuid(), isAdmin: true);
+
+        (await _bookings.GetByIdAsync(created.Id))!.Status.Should().Be(BookingStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task CancelBookingAsync_WhenRepeated_ThrowsBadRequest()
+    {
+        var ev = AddEvent();
+        var created = await _sut.CreateBookingAsync(ev.Id, _userId);
+        await _sut.CancelBookingAsync(created.Id, _userId, isAdmin: false);
+
+        var act = async () => await _sut.CancelBookingAsync(created.Id, _userId, isAdmin: false);
+
+        await act.Should()
+            .ThrowAsync<ValidationException>()
+            .Where(exception => exception.StatusCode == 400);
+    }
+
+    private Event AddEvent(int totalSeats = 10, DateTimeOffset? startAt = null)
+    {
+        var start = startAt ?? new DateTimeOffset(2030, 12, 1, 10, 0, 0, TimeSpan.Zero);
         var ev = Event.Create(
             "Test event",
             null,
-            new DateTimeOffset(2026, 12, 1, 10, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 12, 1, 12, 0, 0, TimeSpan.Zero),
+            start,
+            start.AddHours(2),
             totalSeats);
         _events.Add(ev);
         return ev;
@@ -224,6 +305,14 @@ public sealed class BookingServiceTests
                 .ToList();
             return Task.FromResult(ids);
         }
+
+        public Task<int> CountActiveByUserIdAsync(
+            Guid userId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_items.Values.Count(booking =>
+                booking.UserId == userId &&
+                (booking.Status == BookingStatus.Pending ||
+                 booking.Status == BookingStatus.Confirmed)));
 
         public Task AddAsync(Booking booking, CancellationToken cancellationToken = default)
         {

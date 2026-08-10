@@ -16,6 +16,7 @@
   -->
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.16" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
     <!--
       Нужен инструменту dotnet-ef: startup-проект должен ссылаться на Design,

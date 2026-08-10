@@ -19,6 +19,7 @@ namespace EventsApi.Application.DependencyInjection
             // Сервисы приложения — scoped, т. к. зависят от scoped-репозиториев.
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IBookingService, BookingService>();
+            services.AddScoped<IUserService, UserService>();
 
             // Фоновая обработка Pending-броней.
             services.AddHostedService<BookingProcessor>();

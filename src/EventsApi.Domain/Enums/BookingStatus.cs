@@ -12,6 +12,9 @@ namespace EventsApi.Domain.Enums
         Confirmed = 1,
 
         /// <summary>Бронь отклонена.</summary>
-        Rejected = 2
+        Rejected = 2,
+
+        /// <summary>Бронь отменена пользователем или администратором.</summary>
+        Cancelled = 3
     }
 }

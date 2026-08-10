@@ -33,6 +33,15 @@ namespace EventsApi.Infrastructure.Repositories
                 .ToListAsync(cancellationToken);
         }
 
+        public Task<int> CountActiveByUserIdAsync(
+            Guid userId,
+            CancellationToken cancellationToken = default) =>
+            _context.Bookings.CountAsync(
+                booking => booking.UserId == userId &&
+                    (booking.Status == BookingStatus.Pending ||
+                     booking.Status == BookingStatus.Confirmed),
+                cancellationToken);
+
         public async Task AddAsync(Booking booking, CancellationToken cancellationToken = default)
         {
             // SaveChanges сохраняет и новую бронь, и любые другие изменения, отслеживаемые
