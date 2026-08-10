@@ -1,5 +1,5 @@
-using EventsApi.DTOs;
-using EventsApi.Models;
+using EventsApi.Domain.Entities;
+using EventsApi.Domain.Enums;
 using FluentAssertions;
 using Xunit;
 

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Domain — самый внутренний слой. Не имеет ссылок ни на другие проекты,
+    ни на сторонние фреймворки (ASP.NET Core, EF Core и т. п.).
+  -->
+
+</Project>

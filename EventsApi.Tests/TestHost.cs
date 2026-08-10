@@ -1,6 +1,7 @@
-using EventsApi.DataAccess;
-using EventsApi.Repositories;
-using EventsApi.Services;
+using EventsApi.Application.Abstractions;
+using EventsApi.Application.Services;
+using EventsApi.Infrastructure.Persistence;
+using EventsApi.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,21 +14,22 @@ namespace EventsApi.Tests;
 /// </summary>
 internal static class TestHost
 {
-	public static ServiceProvider Build()
-	{
-		// Имя базы выносим в переменную: если вызвать Guid.NewGuid() прямо в лямбде,
-		// каждый scope получит новую базу и данные не будут общими.
-		var dbName = Guid.NewGuid().ToString();
+    public static ServiceProvider Build()
+    {
+        // Имя базы выносим в переменную: если вызвать Guid.NewGuid() прямо в лямбде,
+        // каждый scope получит новую базу и данные не будут общими.
+        var dbName = Guid.NewGuid().ToString();
 
-		var services = new ServiceCollection();
-		services.AddLogging();
-		services.AddDbContext<AppDbContext>(options =>
-			options.UseInMemoryDatabase(dbName));
-		services.AddScoped<IEventRepository, EventRepository>();
-		services.AddScoped<IBookingRepository, BookingRepository>();
-		services.AddScoped<IEventService, EventService>();
-		services.AddScoped<IBookingService, BookingService>();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseInMemoryDatabase(dbName));
+        services.AddScoped<IEventRepository, EventRepository>();
+        services.AddScoped<IBookingRepository, BookingRepository>();
+        services.AddSingleton<IEventBookingLock, EventBookingLock>();
+        services.AddScoped<IEventService, EventService>();
+        services.AddScoped<IBookingService, BookingService>();
 
-		return services.BuildServiceProvider();
-	}
+        return services.BuildServiceProvider();
+    }
 }
