@@ -1,0 +1,95 @@
+@EventsApi_HostAddress = http://localhost:5134
+
+### Получить все события (первая страница по умолчанию, 10 элементов)
+GET {{EventsApi_HostAddress}}/events
+Accept: application/json
+
+### Фильтр по названию (регистронезависимо, частичное совпадение)
+GET {{EventsApi_HostAddress}}/events?title=митап
+Accept: application/json
+
+### Фильтр по диапазону дат
+GET {{EventsApi_HostAddress}}/events?from=2025-07-01&to=2025-08-31T23:59:59
+Accept: application/json
+
+### Комбинированный фильтр + пагинация
+GET {{EventsApi_HostAddress}}/events?title=митап&from=2025-07-01&to=2025-08-31&page=1&pageSize=5
+Accept: application/json
+
+### Получить событие по ID (заменить GUID)
+GET {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Создать событие
+POST {{EventsApi_HostAddress}}/events
+Content-Type: application/json
+
+{
+  "title": "Митап по C#",
+  "description": "Обсуждаем новинки .NET 9",
+  "startAt": "2025-09-15T18:00:00Z",
+  "endAt":   "2025-09-15T20:00:00Z",
+  "totalSeats": 50
+}
+
+### Создать событие с ошибкой валидации (EndAt <= StartAt)
+POST {{EventsApi_HostAddress}}/events
+Content-Type: application/json
+
+{
+  "title": "Невалидное",
+  "startAt": "2025-09-15T20:00:00Z",
+  "endAt":   "2025-09-15T18:00:00Z",
+  "totalSeats": 50
+}
+
+### Создать событие с ошибкой валидации (totalSeats <= 0) → 400
+POST {{EventsApi_HostAddress}}/events
+Content-Type: application/json
+
+{
+  "title": "Без мест",
+  "startAt": "2025-09-15T18:00:00Z",
+  "endAt":   "2025-09-15T20:00:00Z",
+  "totalSeats": 0
+}
+
+### Сценарий овербукинга: создать событие на 3 места
+POST {{EventsApi_HostAddress}}/events
+Content-Type: application/json
+
+{
+  "title": "Маленький зал",
+  "startAt": "2025-09-15T18:00:00Z",
+  "endAt":   "2025-09-15T20:00:00Z",
+  "totalSeats": 3
+}
+
+### Обновить событие (заменить GUID)
+PUT {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+Content-Type: application/json
+
+{
+  "title": "Обновлённое название",
+  "description": "Новое описание",
+  "startAt": "2025-10-01T10:00:00Z",
+  "endAt":   "2025-10-01T12:00:00Z"
+}
+
+### Удалить событие (заменить GUID)
+DELETE {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000
+
+### Создать бронь для события (заменить GUID события)
+# Первые totalSeats запросов → 202 Accepted, следующий → 409 Conflict
+POST {{EventsApi_HostAddress}}/events/00000000-0000-0000-0000-000000000000/book
+
+### Создать бронь для несуществующего события → 404
+POST {{EventsApi_HostAddress}}/events/ffffffff-ffff-ffff-ffff-ffffffffffff/book
+
+### Получить статус брони (заменить GUID брони)
+GET {{EventsApi_HostAddress}}/bookings/00000000-0000-0000-0000-000000000000
+Accept: application/json
+
+### Бронь по несуществующему ID → 404
+GET {{EventsApi_HostAddress}}/bookings/ffffffff-ffff-ffff-ffff-ffffffffffff
+Accept: application/json

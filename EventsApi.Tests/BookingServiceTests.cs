@@ -1,267 +1,237 @@
-using EventsApi.DataAccess;
-using EventsApi.DTOs;
-using EventsApi.Exceptions;
-using EventsApi.Models;
-using EventsApi.Services;
+using EventsApi.Application.Abstractions;
+using EventsApi.Application.Services;
+using EventsApi.Domain.Entities;
+using EventsApi.Domain.Enums;
+using EventsApi.Domain.Exceptions;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class BookingServiceTests : IDisposable
+/// <summary>
+/// Изолированные unit-тесты BookingService. Хранилище представлено тестовыми
+/// реализациями портов; EF Core и AppDbContext здесь не участвуют.
+/// </summary>
+public sealed class BookingServiceTests
 {
-	private readonly ServiceProvider _sp;
-	private readonly IBookingService _sut;
-	private readonly IEventService _eventService;
-	private readonly AppDbContext _context;
+    private readonly InMemoryEventRepository _events = new();
+    private readonly InMemoryBookingRepository _bookings = new();
+    private readonly BookingService _sut;
 
-	public BookingServiceTests()
-	{
-		_sp = TestHost.Build();
-		_sut = _sp.GetRequiredService<IBookingService>();
-		_eventService = _sp.GetRequiredService<IEventService>();
-		_context = _sp.GetRequiredService<AppDbContext>();
-	}
+    public BookingServiceTests()
+    {
+        _sut = new BookingService(_events, _bookings, new EventBookingLock());
+    }
 
-	public void Dispose() => _sp.Dispose();
+    [Fact]
+    public async Task CreateBookingAsync_ForExistingEvent_ReturnsPendingBooking()
+    {
+        var ev = AddEvent();
 
-	private Task<EventDto> CreateTestEvent(int totalSeats = 10) =>
-		_eventService.CreateAsync(TestData.CreateDto(totalSeats: totalSeats));
+        var booking = await _sut.CreateBookingAsync(ev.Id);
 
-	// ---------- Успешные сценарии ----------
+        booking.Id.Should().NotBe(Guid.Empty);
+        booking.EventId.Should().Be(ev.Id);
+        booking.Status.Should().Be(BookingStatus.Pending);
+        booking.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        booking.ProcessedAt.Should().BeNull();
+    }
 
-	[Fact]
-	public async Task CreateBookingAsync_ForExistingEvent_ReturnsPendingBooking()
-	{
-		// Arrange
-		var ev = await CreateTestEvent();
+    [Fact]
+    public async Task CreateBookingAsync_PersistsBookingThroughRepositoryPort()
+    {
+        var ev = AddEvent();
 
-		// Act
-		var booking = await _sut.CreateBookingAsync(ev.Id);
+        var created = await _sut.CreateBookingAsync(ev.Id);
 
-		// Assert
-		booking.Should().NotBeNull();
-		booking.Id.Should().NotBe(Guid.Empty);
-		booking.EventId.Should().Be(ev.Id);
-		booking.Status.Should().Be(BookingStatus.Pending);
-		booking.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
-		booking.ProcessedAt.Should().BeNull();
-	}
+        (await _bookings.GetByIdAsync(created.Id)).Should().NotBeNull();
+    }
 
-	[Fact]
-	public async Task CreateBookingAsync_PersistsBookingInStore()
-	{
-		var ev = await CreateTestEvent();
+    [Fact]
+    public async Task CreateBookingAsync_DecreasesAvailableSeats()
+    {
+        var ev = AddEvent(totalSeats: 3);
 
-		var dto = await _sut.CreateBookingAsync(ev.Id);
+        await _sut.CreateBookingAsync(ev.Id);
+        await _sut.CreateBookingAsync(ev.Id);
 
-		(await _context.Bookings.AsNoTracking()
-			.FirstOrDefaultAsync(b => b.Id == dto.Id)).Should().NotBeNull();
-	}
+        ev.AvailableSeats.Should().Be(1);
+    }
 
-	[Fact]
-	public async Task CreateBookingAsync_DecreasesAvailableSeats_AfterEachBooking()
-	{
-		// Arrange
-		var ev = await CreateTestEvent(totalSeats: 3);
+    [Fact]
+    public async Task CreateBookingAsync_UpToLimit_CreatesUniqueBookings()
+    {
+        var ev = AddEvent(totalSeats: 3);
 
-		// Act + Assert: после каждой успешной брони AvailableSeats уменьшается на 1.
-		for (var i = 1; i <= 3; i++)
-		{
-			await _sut.CreateBookingAsync(ev.Id);
-			(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(3 - i);
-		}
-	}
+        var bookings = new[]
+        {
+            await _sut.CreateBookingAsync(ev.Id),
+            await _sut.CreateBookingAsync(ev.Id),
+            await _sut.CreateBookingAsync(ev.Id)
+        };
 
-	[Fact]
-	public async Task CreateBookingAsync_UpToLimit_AllSucceedWithUniqueIds()
-	{
-		// Arrange
-		var ev = await CreateTestEvent(totalSeats: 5);
+        bookings.Select(booking => booking.Id).Should().OnlyHaveUniqueItems();
+        bookings.Should().OnlyContain(booking => booking.Status == BookingStatus.Pending);
+        ev.AvailableSeats.Should().Be(0);
+    }
 
-		// Act: создаём брони до лимита.
-		var bookings = new List<BookingDto>();
-		for (var i = 0; i < 5; i++)
-			bookings.Add(await _sut.CreateBookingAsync(ev.Id));
+    [Fact]
+    public async Task GetBookingByIdAsync_ExistingBooking_ReturnsCurrentState()
+    {
+        var ev = AddEvent();
+        var created = await _sut.CreateBookingAsync(ev.Id);
+        var entity = await _bookings.GetByIdAsync(created.Id);
+        entity!.Confirm(DateTime.UtcNow);
 
-		// Assert
-		bookings.Should().HaveCount(5);
-		bookings.Select(b => b.Id).Should().OnlyHaveUniqueItems();
-		bookings.Should().OnlyContain(b => b.Status == BookingStatus.Pending);
-		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
-	}
+        var result = await _sut.GetBookingByIdAsync(created.Id);
 
-	[Fact]
-	public async Task CreateBookingAsync_MultipleBookingsForSameEvent_AllHaveUniqueIds()
-	{
-		// Arrange
-		var ev = await CreateTestEvent();
+        result.Status.Should().Be(BookingStatus.Confirmed);
+        result.ProcessedAt.Should().NotBeNull();
+    }
 
-		// Act
-		var a = await _sut.CreateBookingAsync(ev.Id);
-		var b = await _sut.CreateBookingAsync(ev.Id);
-		var c = await _sut.CreateBookingAsync(ev.Id);
+    [Fact]
+    public async Task ReleaseSeats_AllowsNewBookingForSameSeat()
+    {
+        var ev = AddEvent(totalSeats: 1);
+        var first = await _sut.CreateBookingAsync(ev.Id);
+        ev.ReleaseSeats();
 
-		// Assert
-		var ids = new[] { a.Id, b.Id, c.Id };
-		ids.Should().OnlyHaveUniqueItems();
-		new[] { a, b, c }.Should().OnlyContain(x => x.EventId == ev.Id);
-		new[] { a, b, c }.Should().OnlyContain(x => x.Status == BookingStatus.Pending);
-	}
+        var second = await _sut.CreateBookingAsync(ev.Id);
 
-	[Fact]
-	public async Task GetBookingByIdAsync_ExistingId_ReturnsCorrectBooking()
-	{
-		var ev = await CreateTestEvent();
-		var created = await _sut.CreateBookingAsync(ev.Id);
+        second.Id.Should().NotBe(first.Id);
+        ev.AvailableSeats.Should().Be(0);
+    }
 
-		var fetched = await _sut.GetBookingByIdAsync(created.Id);
+    [Fact]
+    public async Task CreateBookingAsync_ForNonExistentEvent_ThrowsNotFound()
+    {
+        var unknownEventId = Guid.NewGuid();
 
-		fetched.Id.Should().Be(created.Id);
-		fetched.EventId.Should().Be(ev.Id);
-		fetched.Status.Should().Be(BookingStatus.Pending);
-	}
+        var act = async () => await _sut.CreateBookingAsync(unknownEventId);
 
-	[Fact]
-	public async Task GetBookingByIdAsync_ReflectsStatusChange_AfterConfirm()
-	{
-		// Arrange
-		var ev = await CreateTestEvent();
-		var created = await _sut.CreateBookingAsync(ev.Id);
+        await act.Should()
+            .ThrowAsync<NotFoundException>()
+            .Where(exception => exception.StatusCode == 404)
+            .Where(exception => exception.Message.Contains(unknownEventId.ToString()));
+    }
 
-		// Симулируем обработку: меняем статус через доменный метод и сохраняем.
-		var entity = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
-		entity.Confirm(DateTime.UtcNow);
-		await _context.SaveChangesAsync();
+    [Fact]
+    public async Task CreateBookingAsync_ForDeletedEvent_ThrowsNotFound()
+    {
+        var ev = AddEvent();
+        await _events.DeleteAsync(ev);
 
-		// Act
-		var fetched = await _sut.GetBookingByIdAsync(created.Id);
+        var act = async () => await _sut.CreateBookingAsync(ev.Id);
 
-		// Assert
-		fetched.Status.Should().Be(BookingStatus.Confirmed);
-		fetched.ProcessedAt.Should().NotBeNull();
-	}
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
 
-	[Fact]
-	public async Task GetBookingByIdAsync_ReflectsStatusChange_AfterReject()
-	{
-		var ev = await CreateTestEvent();
-		var created = await _sut.CreateBookingAsync(ev.Id);
+    [Fact]
+    public async Task CreateBookingAsync_WhenSeatsExhausted_ThrowsAndDoesNotPersist()
+    {
+        var ev = AddEvent(totalSeats: 1);
+        await _sut.CreateBookingAsync(ev.Id);
 
-		var entity = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
-		entity.Reject(DateTime.UtcNow);
-		await _context.SaveChangesAsync();
+        var act = async () => await _sut.CreateBookingAsync(ev.Id);
 
-		var fetched = await _sut.GetBookingByIdAsync(created.Id);
+        await act.Should()
+            .ThrowAsync<NoAvailableSeatsException>()
+            .Where(exception => exception.StatusCode == 409);
+        _bookings.Count.Should().Be(1);
+        ev.AvailableSeats.Should().Be(0);
+    }
 
-		fetched.Status.Should().Be(BookingStatus.Rejected);
-		fetched.ProcessedAt.Should().NotBeNull();
-	}
+    [Fact]
+    public async Task GetBookingByIdAsync_NonExistentId_ThrowsNotFound()
+    {
+        var unknownBookingId = Guid.NewGuid();
 
-	// ---------- Reject + ReleaseSeats ----------
+        var act = async () => await _sut.GetBookingByIdAsync(unknownBookingId);
 
-	[Fact]
-	public async Task RejectAndReleaseSeats_RestoresAvailableSeats()
-	{
-		// Arrange: единственное место занято.
-		var ev = await CreateTestEvent(totalSeats: 1);
-		var created = await _sut.CreateBookingAsync(ev.Id);
-		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
+        await act.Should()
+            .ThrowAsync<NotFoundException>()
+            .Where(exception => exception.Message.Contains(unknownBookingId.ToString()));
+    }
 
-		// Act: отклоняем бронь и возвращаем место в пул.
-		var booking = await _context.Bookings.FirstAsync(b => b.Id == created.Id);
-		booking.Reject(DateTime.UtcNow);
-		var entity = await _context.Events.FirstAsync(e => e.Id == ev.Id);
-		entity.ReleaseSeats();
-		await _context.SaveChangesAsync();
+    private Event AddEvent(int totalSeats = 10)
+    {
+        var ev = Event.Create(
+            "Test event",
+            null,
+            new DateTimeOffset(2026, 12, 1, 10, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 12, 1, 12, 0, 0, TimeSpan.Zero),
+            totalSeats);
+        _events.Add(ev);
+        return ev;
+    }
 
-		// Assert
-		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(1);
-	}
+    private sealed class InMemoryEventRepository : IEventRepository
+    {
+        private readonly Dictionary<Guid, Event> _items = new();
 
-	[Fact]
-	public async Task RejectAndReleaseSeats_AllowsNewBookingForSameSeat()
-	{
-		// Arrange: единственное место занято.
-		var ev = await CreateTestEvent(totalSeats: 1);
-		var first = await _sut.CreateBookingAsync(ev.Id);
+        public void Add(Event ev) => _items.Add(ev.Id, ev);
 
-		var booking = await _context.Bookings.FirstAsync(b => b.Id == first.Id);
-		booking.Reject(DateTime.UtcNow);
-		var entity = await _context.Events.FirstAsync(e => e.Id == ev.Id);
-		entity.ReleaseSeats();
-		await _context.SaveChangesAsync();
+        public Task<(IReadOnlyList<Event> Items, int TotalCount)> GetPagedAsync(
+            string? title,
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            int skip,
+            int take,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<Event> items = _items.Values.Skip(skip).Take(take).ToList();
+            return Task.FromResult((items, _items.Count));
+        }
 
-		// Act: на освободившееся место можно создать новую бронь.
-		var second = await _sut.CreateBookingAsync(ev.Id);
+        public Task<Event?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_items.GetValueOrDefault(id));
 
-		// Assert
-		second.Id.Should().NotBe(first.Id);
-		second.Status.Should().Be(BookingStatus.Pending);
-		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
-	}
+        public Task AddAsync(Event ev, CancellationToken cancellationToken = default)
+        {
+            Add(ev);
+            return Task.CompletedTask;
+        }
 
-	// ---------- Неуспешные сценарии ----------
+        public Task UpdateAsync(Event ev, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
 
-	[Fact]
-	public async Task CreateBookingAsync_ForNonExistentEvent_ThrowsNotFound()
-	{
-		var unknownEventId = Guid.NewGuid();
+        public Task DeleteAsync(Event ev, CancellationToken cancellationToken = default)
+        {
+            _items.Remove(ev.Id);
+            return Task.CompletedTask;
+        }
+    }
 
-		var act = async () => await _sut.CreateBookingAsync(unknownEventId);
+    private sealed class InMemoryBookingRepository : IBookingRepository
+    {
+        private readonly Dictionary<Guid, Booking> _items = new();
 
-		await act.Should()
-			.ThrowAsync<NotFoundException>()
-			.Where(ex => ex.StatusCode == 404)
-			.Where(ex => ex.Message.Contains(unknownEventId.ToString()));
-	}
+        public int Count => _items.Count;
 
-	[Fact]
-	public async Task CreateBookingAsync_ForDeletedEvent_ThrowsNotFound()
-	{
-		// Arrange
-		var ev = await CreateTestEvent();
-		await _eventService.DeleteAsync(ev.Id);
+        public Task<Booking?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_items.GetValueOrDefault(id));
 
-		// Act
-		var act = async () => await _sut.CreateBookingAsync(ev.Id);
+        public Task<IReadOnlyList<Guid>> GetPendingIdsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<Guid> ids = _items.Values
+                .Where(booking => booking.Status == BookingStatus.Pending)
+                .Select(booking => booking.Id)
+                .ToList();
+            return Task.FromResult(ids);
+        }
 
-		// Assert
-		await act.Should().ThrowAsync<NotFoundException>();
-	}
+        public Task AddAsync(Booking booking, CancellationToken cancellationToken = default)
+        {
+            _items.Add(booking.Id, booking);
+            return Task.CompletedTask;
+        }
 
-	[Fact]
-	public async Task CreateBookingAsync_WhenSeatsExhausted_ThrowsNoAvailableSeats()
-	{
-		// Arrange: исчерпываем единственное место.
-		var ev = await CreateTestEvent(totalSeats: 1);
-		await _sut.CreateBookingAsync(ev.Id);
-
-		// Act: следующая попытка должна упасть с 409.
-		var act = async () => await _sut.CreateBookingAsync(ev.Id);
-
-		// Assert
-		await act.Should()
-			.ThrowAsync<NoAvailableSeatsException>()
-			.Where(ex => ex.StatusCode == 409)
-			.WithMessage("No available seats for this event");
-
-		// Лишняя бронь не создана, мест не появилось.
-		(await _context.Bookings.CountAsync()).Should().Be(1);
-		(await _eventService.GetByIdAsync(ev.Id)).AvailableSeats.Should().Be(0);
-	}
-
-	[Fact]
-	public async Task GetBookingByIdAsync_NonExistentId_ThrowsNotFound()
-	{
-		var unknownBookingId = Guid.NewGuid();
-
-		var act = async () => await _sut.GetBookingByIdAsync(unknownBookingId);
-
-		await act.Should()
-			.ThrowAsync<NotFoundException>()
-			.Where(ex => ex.Message.Contains(unknownBookingId.ToString()));
-	}
+        public Task UpdateAsync(Booking booking, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
 }

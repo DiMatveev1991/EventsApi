@@ -3,10 +3,18 @@ REST API для управления мероприятиями, построе�
 с хранением данных в PostgreSQL через Entity Framework Core. Схема базы данных
 управляется миграциями EF Core, а слой доступа к данным вынесен в репозитории
 и покрыт интеграционными тестами на реальной PostgreSQL через Testcontainers.
+
+Решение организовано по принципам **чистой архитектуры (Clean Architecture)** и
+разделено на четыре отдельных проекта (сборки) — `EventsApi.Domain`,
+`EventsApi.Application`, `EventsApi.Infrastructure`, `EventsApi.Presentation`.
+Направление зависимостей всегда «внутрь» и проверяется компилятором через
+`<ProjectReference>` (см. раздел [«Архитектура»](#архитектура)).
+
 Быстрый старт
 Требования
-.NET 9 SDK (обязательно). Проект использует `TargetFramework=net9.0` во всех проектах
-(`EventsApi`, `EventsApi.DTOs`, `EventsApi.Tests`, `EventsApi.IntegrationTests`).
+.NET 9 SDK (обязательно). Все проекты используют `TargetFramework=net9.0`
+(`EventsApi.Domain`, `EventsApi.Application`, `EventsApi.Infrastructure`,
+`EventsApi.Presentation`, `EventsApi.Tests`, `EventsApi.IntegrationTests`).
 Проверить установленную версию:
 ```bash
   dotnet --list-sdks
@@ -28,25 +36,25 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: eventapi
     ports:
       - "5432:5432"
 ```
+Перед запуском задайте `POSTGRES_PASSWORD` в локальном окружении.
+
 Настройка строки подключения
-Строка подключения задаётся в `appsettings.json` в секции `ConnectionStrings:DefaultConnection`:
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=eventapi;Username=postgres;Password=postgres"
-  }
-}
+Строка подключения задаётся переменной окружения (секреты не хранятся в
+`appsettings.json`):
+```bash
+export ConnectionStrings__DefaultConnection='Host=localhost;Port=5432;Database=eventapi;Username=postgres;Password=<password>'
 ```
-Отредактируйте `Host`, `Port`, `Database`, `Username`, `Password` под своё окружение.
+Для локального профиля `Development` также используйте env-переменную или
+`dotnet user-secrets`; credentials в файлах `appsettings*.json` не хранятся.
 
 Схема БД (таблицы `events` и `bookings` и связь между ними) создаётся и обновляется
 **миграциями EF Core**, а не `EnsureCreated()`. Приложение при старте автоматически
-применяет все ещё не применённые миграции методом `Migrate()` (см. раздел
+применяет все ещё не применённые миграции методом `MigrateWithLegacyBaselineAsync()` (см. раздел
 «Миграции базы данных»).
 Запуск
 ```bash
@@ -57,7 +65,7 @@ cd EventsApi
 docker compose up -d
 
 dotnet build
-dotnet run --project EventsApi.csproj
+dotnet run --project src/EventsApi.Presentation/EventsApi.Presentation.csproj
 ```
 При первом старте приложение применит миграции и создаст схему БД. Ручной запуск
 SQL не требуется.
@@ -67,45 +75,58 @@ HTTPS: `https://localhost:7201`
 Swagger UI
 Откройте в браузере: `http://localhost:5134/swagger`
 Миграции базы данных
-Схема БД управляется миграциями EF Core. Начальная миграция `InitialCreate`
-(папка `DataAccess/Migrations`) создаёт таблицы `events`, `bookings` и внешний ключ
-`bookings.EventId → events.Id` (`ON DELETE CASCADE`).
+Схема БД управляется миграциями EF Core. Миграции и `AppDbContext` находятся в слое
+**Infrastructure**. Начальная миграция `InitialCreate`
+(папка `src/EventsApi.Infrastructure/Persistence/Migrations`) создаёт таблицы `events`,
+`bookings` и внешний ключ `bookings.EventId → events.Id` (`ON DELETE CASCADE`).
 
-Применение миграций при старте приложения (`Program.cs`):
+Применение миграций при старте приложения (composition root, `Program.cs` в Presentation):
 ```csharp
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    await db.Database.MigrateWithLegacyBaselineAsync();
 }
 ```
+
+Если таблицы были созданы старой версией через `EnsureCreated()` и таблица истории
+миграций отсутствует, совместимая схема автоматически регистрируется как baseline,
+после чего применяются новые миграции.
 
 Для работы с миграциями нужен инструмент `dotnet-ef`:
 ```bash
 dotnet tool install --global dotnet-ef
 ```
 
+Миграции хранятся в проекте **Infrastructure** (там же `AppDbContext`), а точкой входа
+(startup-project) выступает **Presentation** — именно его composition root настраивает
+`AppDbContext` через `UseNpgsql(...)`. Поэтому в командах `dotnet ef` указываются оба проекта.
+
 Создать новую миграцию (после изменения модели/конфигураций):
 ```bash
 dotnet ef migrations add <ИмяМиграции> \
-  --project EventsApi.csproj \
-  --startup-project EventsApi.csproj \
-  --output-dir DataAccess/Migrations
+  --project src/EventsApi.Infrastructure/EventsApi.Infrastructure.csproj \
+  --startup-project src/EventsApi.Presentation/EventsApi.Presentation.csproj \
+  --output-dir Persistence/Migrations
 ```
+(`--output-dir` задаётся относительно проекта Infrastructure, поэтому миграции
+попадут в `src/EventsApi.Infrastructure/Persistence/Migrations`.)
 
 Применить миграции к базе вручную (кроме автоприменения при старте):
 ```bash
 dotnet ef database update \
-  --project EventsApi.csproj \
-  --startup-project EventsApi.csproj
+  --project src/EventsApi.Infrastructure/EventsApi.Infrastructure.csproj \
+  --startup-project src/EventsApi.Presentation/EventsApi.Presentation.csproj
 ```
 
 Откатить последнюю ещё не применённую миграцию:
 ```bash
-dotnet ef migrations remove --project EventsApi.csproj --startup-project EventsApi.csproj
+dotnet ef migrations remove \
+  --project src/EventsApi.Infrastructure/EventsApi.Infrastructure.csproj \
+  --startup-project src/EventsApi.Presentation/EventsApi.Presentation.csproj
 ```
 
-> Пакет `Microsoft.EntityFrameworkCore.Design` подключён к основному проекту —
+> Пакет `Microsoft.EntityFrameworkCore.Design` подключён к проекту `EventsApi.Infrastructure` —
 > он нужен инструменту `dotnet-ef` для генерации миграций.
 Запуск тестов
 ```bash
@@ -157,78 +178,132 @@ dotnet test EventsApi.IntegrationTests/EventsApi.IntegrationTests.csproj
 по Id (в т. ч. `null`), переход статуса и его сохранение, выборка Id только
 `Pending`-броней; сохранение брони и резервирования места одной транзакцией;
 срабатывание ограничения внешнего ключа при ссылке на несуществующее событие.
+Архитектура
+Решение разделено на четыре сборки со строго направленными «внутрь» зависимостями.
+Компилятор не даст нарушить направление: соответствующих `<ProjectReference>` просто нет.
+
+```
+            ┌─────────────────────────────────────────────┐
+            │              Presentation                    │  веб-проект, composition root
+            │  (Controllers, Middleware, Program.cs)       │
+            └───────────────┬──────────────┬───────────────┘
+                            │              │
+              ссылается на  │              │  ссылается на
+                            ▼              ▼
+            ┌───────────────────────┐   ┌──────────────────────────────┐
+            │     Application        │◄──│        Infrastructure        │
+            │ (use cases, порты,     │   │ (AppDbContext, репозитории,  │
+            │  DTO, фоновый сервис)  │   │  миграции — реализации портов)│
+            └───────────┬───────────┘   └───────────────┬──────────────┘
+                        │                               │
+                        ▼                               ▼
+            ┌─────────────────────────────────────────────┐
+            │                  Domain                      │  сущности, enum,
+            │        (сущности, enum, исключения)          │  доменные исключения
+            └─────────────────────────────────────────────┘
+```
+
+* **Domain** — сущности (`Event`, `Booking`), перечисление `BookingStatus`, доменные
+  исключения (`AppException` и наследники). Не зависит **ни от чего**: ни от других
+  проектов, ни от фреймворков (ASP.NET Core, EF Core). HTTP-код в исключениях хранится
+  числом, чтобы не тянуть ASP.NET Core в Domain.
+* **Application** — сценарии/сервисы (`EventService`, `BookingService`), **интерфейсы
+  портов** (`IEventRepository`, `IBookingRepository`) — абстракции доступа к данным,
+  DTO и фоновый сервис `BookingProcessor`. Зависит **только от Domain** и от абстракций
+  `Microsoft.Extensions.*` (DI/Hosting/Logging). Ссылки на Infrastructure нет.
+* **Infrastructure** — реализации портов поверх EF Core: `AppDbContext`, конфигурации
+  маппинга, миграции, `EventRepository`, `BookingRepository`. Зависит от Application
+  (интерфейсы портов) и Domain (сущности).
+* **Presentation** — тонкие контроллеры, middleware-обработчик исключений и
+  **composition root** (`Program.cs`), где через DI связываются реализации из
+  Infrastructure с интерфейсами из Application. Зависит от Application и Infrastructure.
+
+Регистрация зависимостей каждого слоя вынесена в extension-методы, поэтому `Program.cs`
+остаётся компактным:
+* `AddApplicationServices()` — `EventsApi.Application.DependencyInjection`;
+* `AddInfrastructureServices(IConfiguration)` — `EventsApi.Infrastructure.DependencyInjection`.
+
 Структура проекта
 ```
 EventsApi/
-├── Controllers/
-│   ├── EventsController.cs            # Эндпоинты по событиям + POST /events/{id}/book
-│   └── BookingsController.cs          # Эндпоинты по бронированиям
-├── BackgroundServices/
-│   └── BookingProcessor.cs            # Фоновая обработка Pending-броней (репозитории через IServiceScopeFactory)
-├── DataAccess/
-│   ├── AppDbContext.cs                # DbContext c DbSet<Event> и DbSet<Booking>
-│   ├── Configurations/
-│   │   ├── EventConfiguration.cs      # Fluent API-маппинг Event - таблица events
-│   │   └── BookingConfiguration.cs    # Fluent API-маппинг Booking - таблица bookings
-│   └── Migrations/                    # Миграции EF Core (InitialCreate + snapshot)
-├── Repositories/
-│   ├── IEventRepository.cs            # Контракт доступа к данным событий
-│   ├── EventRepository.cs             # Реализация поверх AppDbContext
-│   ├── IBookingRepository.cs          # Контракт доступа к данным броней
-│   └── BookingRepository.cs           # Реализация поверх AppDbContext
-├── EventsApi.DTOs/
-│   ├── DTOs/CreateEventDto.cs
-│   ├── DTOs/UpdateEventDto.cs
-│   ├── DTOs/EventDto.cs
-│   ├── DTOs/EventQueryParameters.cs
-│   ├── DTOs/PaginatedResult.cs
-│   ├── DTOs/BookingDto.cs
-│   └── DTOs/BookingStatus.cs
-├── Exceptions/
-│   └── AppException.cs                # NotFoundException, ValidationException,
-│                                      # NoAvailableSeatsException
-├── Middleware/
-│   └── ExceptionHandlingMiddleware.cs # Глобальный обработчик ошибок
-├── Models/
-│   ├── Event.cs                       # + навигация Bookings, TryReserveSeats/ReleaseSeats
-│   └── Booking.cs                     # + навигация Event
-├── Services/
-│   ├── IEventService.cs
-│   ├── EventService.cs                # Работает с данными только через IEventRepository
-│   ├── IBookingService.cs
-│   └── BookingService.cs              # Критическая секция бронирования под SemaphoreSlim, репозитории
-├── EventsApi.Tests/                   # xUnit + FluentAssertions + EF Core InMemory (юнит-тесты)
-│   ├── TestHost.cs                    # DI-контейнер с InMemory-провайдером для тестов
+├── src/
+│   ├── EventsApi.Domain/                       # Слой Domain (ни от чего не зависит)
+│   │   ├── Entities/
+│   │   │   ├── Event.cs                         # + навигация Bookings, TryReserveSeats/ReleaseSeats
+│   │   │   └── Booking.cs                       # + навигация Event, Confirm/Reject
+│   │   ├── Enums/
+│   │   │   └── BookingStatus.cs                 # Pending / Confirmed / Rejected
+│   │   └── Exceptions/
+│   │       └── AppException.cs                  # NotFoundException, ValidationException, NoAvailableSeatsException
+│   │
+│   ├── EventsApi.Application/                   # Слой Application (зависит только от Domain)
+│   │   ├── Abstractions/                        # Порты (интерфейсы), которые реализует Infrastructure
+│   │   │   ├── IEventRepository.cs
+│   │   │   └── IBookingRepository.cs
+│   │   ├── Dtos/
+│   │   │   ├── CreateEventDto.cs / UpdateEventDto.cs / EventWriteDto.cs
+│   │   │   ├── EventDto.cs / EventQueryParameters.cs / PaginatedResult.cs
+│   │   │   └── BookingDto.cs
+│   │   ├── Services/
+│   │   │   ├── IEventService.cs / EventService.cs
+│   │   │   └── IBookingService.cs / BookingService.cs
+│   │   ├── BackgroundServices/
+│   │   │   └── BookingProcessor.cs              # Фоновая обработка Pending-броней (порты через IServiceScopeFactory)
+│   │   └── DependencyInjection/
+│   │       └── ApplicationServiceCollectionExtensions.cs   # AddApplicationServices()
+│   │
+│   ├── EventsApi.Infrastructure/                # Слой Infrastructure (зависит от Application и Domain)
+│   │   ├── Persistence/
+│   │   │   ├── AppDbContext.cs                  # DbContext c DbSet<Event> и DbSet<Booking>
+│   │   │   ├── Configurations/                  # Fluent API-маппинг сущностей
+│   │   │   │   ├── EventConfiguration.cs
+│   │   │   │   └── BookingConfiguration.cs
+│   │   │   └── Migrations/                      # Миграции EF Core (InitialCreate + snapshot)
+│   │   ├── Repositories/
+│   │   │   ├── EventRepository.cs               # Реализация IEventRepository поверх AppDbContext
+│   │   │   └── BookingRepository.cs             # Реализация IBookingRepository поверх AppDbContext
+│   │   └── DependencyInjection/
+│   │       └── InfrastructureServiceCollectionExtensions.cs # AddInfrastructureServices(IConfiguration)
+│   │
+│   └── EventsApi.Presentation/                  # Слой Presentation (веб-проект, composition root)
+│       ├── Controllers/
+│       │   ├── EventsController.cs              # Эндпоинты по событиям + POST /events/{id}/book
+│       │   └── BookingsController.cs            # Эндпоинты по бронированиям
+│       ├── Middleware/
+│       │   └── ExceptionHandlingMiddleware.cs   # Глобальный обработчик ошибок (доменные исключения → HTTP)
+│       ├── Program.cs                           # Composition root: AddApplicationServices + AddInfrastructureServices
+│       └── appsettings.json                     # Общие настройки без credentials
+│
+├── EventsApi.Tests/                             # xUnit + FluentAssertions + EF Core InMemory (юнит-тесты)
+│   ├── TestHost.cs                              # DI-контейнер с InMemory-провайдером для тестов
 │   ├── EventServiceCrudTests.cs
 │   ├── EventServiceFilteringTests.cs
 │   ├── EventServicePaginationTests.cs
 │   ├── EventServiceValidationTests.cs
 │   ├── BookingEntityTests.cs
 │   ├── BookingServiceTests.cs
-│   ├── BookingConcurrencyTests.cs     # Тесты на овербукинг и уникальность Id
+│   ├── BookingConcurrencyTests.cs               # Тесты на овербукинг и уникальность Id
 │   └── BookingProcessorTests.cs
-├── EventsApi.IntegrationTests/        # xUnit + Testcontainers (реальная PostgreSQL)
+├── EventsApi.IntegrationTests/                  # xUnit + Testcontainers (реальная PostgreSQL)
 │   ├── Infrastructure/
-│   │   ├── PostgresDatabaseFixture.cs # Один контейнер PostgreSQL + сброс базы миграциями
-│   │   ├── PostgresCollection.cs      # Коллекция тестов вокруг общего контейнера
-│   │   ├── IntegrationTestBase.cs     # Чистое состояние базы перед каждым тестом
-│   │   └── TestData.cs                # Фабрики тестовых сущностей
+│   │   ├── PostgresDatabaseFixture.cs           # Один контейнер PostgreSQL + сброс базы миграциями
+│   │   ├── PostgresCollection.cs                # Коллекция тестов вокруг общего контейнера
+│   │   ├── IntegrationTestBase.cs               # Чистое состояние базы перед каждым тестом
+│   │   └── TestData.cs                          # Фабрики тестовых сущностей
 │   ├── MigrationTests.cs
 │   ├── EventRepositoryTests.cs
 │   └── BookingRepositoryTests.cs
-├── Program.cs
-├── appsettings.json                   # ConnectionStrings:DefaultConnection
-└── EventsApi.csproj
+└── EventsApi.sln
 ```
 База данных и слой доступа к данным
 Данные хранятся в PostgreSQL, взаимодействие — через Entity Framework Core.
 
-`AppDbContext` (папка `DataAccess`) наследуется от `DbContext`, принимает
-`DbContextOptions<AppDbContext>` и содержит два `DbSet`: `Events` и `Bookings`.
-В `OnModelCreating` вызывается `ApplyConfigurationsFromAssembly`, что автоматически
-подключает все конфигурации `IEntityTypeConfiguration<T>` из сборки.
+`AppDbContext` (проект `EventsApi.Infrastructure`, папка `Persistence`) наследуется от
+`DbContext`, принимает `DbContextOptions<AppDbContext>` и содержит два `DbSet`: `Events`
+и `Bookings`. В `OnModelCreating` вызывается `ApplyConfigurationsFromAssembly`, что
+автоматически подключает все конфигурации `IEntityTypeConfiguration<T>` из сборки.
 
-Маппинг сущностей описан через Fluent API (папка `DataAccess/Configurations`):
+Маппинг сущностей описан через Fluent API (папка `Persistence/Configurations` проекта Infrastructure):
 
 `EventConfiguration` — таблица `events`, первичный ключ по `Id` с `ValueGeneratedNever()`
 (идентификатор генерируется в коде через `Guid.NewGuid()`), ограничения `IsRequired()`
@@ -241,10 +316,13 @@ EventsApi/
 Сущности `Event` и `Booking` имеют приватный конструктор без параметров — он нужен EF Core
 для создания экземпляров через рефлексию при чтении данных из БД, а также навигационные
 свойства для связи между собой (`Event.Bookings` и `Booking.Event`).
-Репозитории
-Вся работа с `AppDbContext` инкапсулирована в репозиториях — сервисы и фоновый обработчик
-обращаются к данным только через их интерфейсы и напрямую к контексту не ходят.
-Репозитории содержат только логику доступа к данным, без бизнес-правил.
+Репозитории (порты и адаптеры)
+Доступ к данным описан **портами** — интерфейсами `IEventRepository` и `IBookingRepository`
+в слое **Application** (папка `Abstractions`). Их реализации (**адаптеры**) —
+`EventRepository` и `BookingRepository` — живут в слое **Infrastructure** и инкапсулируют
+всю работу с `AppDbContext`. Сервисы и фоновый обработчик обращаются к данным только через
+интерфейсы портов и напрямую к контексту не ходят; сами репозитории содержат только логику
+доступа к данным, без бизнес-правил.
 
 `IEventRepository` / `EventRepository` — постраничная выборка событий с фильтрами
 (`GetPagedAsync`), чтение по Id, добавление, обновление, удаление.
@@ -252,12 +330,17 @@ EventsApi/
 `IBookingRepository` / `BookingRepository` — чтение брони по Id, выборка Id
 `Pending`-броней (`GetPendingIdsAsync`), добавление и обновление брони.
 
-Регистрация в DI (`Program.cs`): `AppDbContext` регистрируется через
-`AddDbContext(...).UseNpgsql(...)` (жизненный цикл — scoped). Репозитории
-(`IEventRepository`, `IBookingRepository`) и сервисы (`IEventService`, `IBookingService`)
-зарегистрированы как **scoped**, поэтому в пределах одного запроса все они делят один
-экземпляр `AppDbContext`. Благодаря этому сохранение брони и уменьшение `AvailableSeats`
-у события фиксируются одной транзакцией.
+Регистрация в DI — в **composition root** (`Program.cs` проекта Presentation) через
+extension-методы слоёв:
+* `AddInfrastructureServices(builder.Configuration)` регистрирует `AppDbContext` через
+  `AddDbContext(...).UseNpgsql(...)` и адаптеры портов (`IEventRepository`, `IBookingRepository`);
+* `AddApplicationServices()` регистрирует сервисы (`IEventService`, `IBookingService`)
+  и фоновый `BookingProcessor`.
+
+`AppDbContext`, репозитории и сервисы зарегистрированы как **scoped**, поэтому в пределах
+одного запроса все они делят один экземпляр `AppDbContext`. Благодаря этому сохранение брони
+и уменьшение `AvailableSeats` у события фиксируются одной транзакцией. Application при этом
+не знает о конкретных реализациях — их подставляет DI-контейнер в Presentation.
 
 `EventService` и `BookingService` реализуют бизнес-логику (валидация, нормализация
 пагинации, критическая секция бронирования) и получают данные исключительно через
@@ -359,10 +442,10 @@ Content-Type: application/json
 секция «получение события → проверка и резервирование места (`TryReserveSeats`) → создание брони →
 сохранение» выполняется атомарно.
 
-Так как внутри секции есть `await`-вызовы (обращения к БД), обычный `lock` использовать нельзя —
-применяется `SemaphoreSlim(1, 1)`. Сервис — scoped (у каждого запроса свой `AppDbContext`),
-поэтому семафор объявлен `static`: он синхронизирует критическую секцию между всеми экземплярами
-сервиса. Так как `IEventRepository` и `IBookingRepository` в пределах запроса делят один
+Так как внутри секции есть `await`-вызовы (обращения к БД), обычный `lock` использовать нельзя.
+Singleton `EventBookingLock` хранит отдельный `SemaphoreSlim(1, 1)` для каждого `EventId`:
+запросы к одному событию сериализуются, а бронирования разных событий не мешают друг другу.
+Неиспользуемые блокировки удаляются. Так как `IEventRepository` и `IBookingRepository` в пределах запроса делят один
 `AppDbContext`, сохранение новой брони одной транзакцией фиксирует и изменение `AvailableSeats`
 у отслеживаемого события. Если мест нет, выбрасывается `NoAvailableSeatsException` → `409 Conflict`.
 Операции чтения (`GetBookingByIdAsync`) синхронизацией не охватываются.
@@ -375,8 +458,8 @@ curl -X POST http://localhost:5134/events \
   -d '{
     "title": "Митап по C#",
     "description": "Обсуждаем .NET",
-    "startAt": "2025-09-15T18:00:00",
-    "endAt":   "2025-09-15T20:00:00",
+    "startAt": "2025-09-15T18:00:00Z",
+    "endAt":   "2025-09-15T20:00:00Z",
     "totalSeats": 50
   }'
 # → 201 Created, в теле объект события с id
@@ -401,7 +484,7 @@ sleep 3 && curl http://localhost:5134/bookings/<booking-id>
 # 1. Создаём событие на 3 места
 curl -X POST http://localhost:5134/events \
   -H "Content-Type: application/json" \
-  -d '{ "title": "Маленький зал", "startAt": "2025-09-15T18:00:00", "endAt": "2025-09-15T20:00:00", "totalSeats": 3 }'
+  -d '{ "title": "Маленький зал", "startAt": "2025-09-15T18:00:00Z", "endAt": "2025-09-15T20:00:00Z", "totalSeats": 3 }'
 # → 201 Created, totalSeats=3, availableSeats=3
 
 # 2. Создаём три брони — все успешны
@@ -454,10 +537,10 @@ curl http://localhost:5134/events/<event-id>
 }
 ```
 Тестирование
-Юнит-тесты (`EventsApi.Tests`) — xUnit + FluentAssertions, паттерн AAA, InMemory-провайдер
-EF Core: через `ServiceCollection` настраивается DI с `AddDbContext(...).UseInMemoryDatabase(...)`,
-регистрируются `AppDbContext`, репозитории и сервисы. Для каждого тестового класса создаётся
-уникальная InMemory-база (имя — новый `Guid`), чтобы тесты не влияли друг на друга (см. `TestHost`).
+Юнит-тесты (`EventsApi.Tests`) — xUnit + FluentAssertions, паттерн AAA. Тесты
+`BookingService` используют изолированные тестовые реализации `IEventRepository` и
+`IBookingRepository` без EF Core. Остальные сервисные и конкурентные тесты используют
+InMemory-провайдер через `TestHost`; для каждого контейнера создаётся уникальная база.
 Тесты на конкурентность создают отдельный scope для каждого параллельного запроса.
 Что покрыто:
 `EventService`: CRUD, фильтрация (`title`, `from`, `to`, комбинации), пагинация, валидация
@@ -468,10 +551,12 @@ EF Core: через `ServiceCollection` настраивается DI с `AddDbC
 `BookingProcessor`: Pending → Confirmed, Pending → Rejected при удалённом событии, параллельная обработка нескольких броней (3 брони по 2 с обрабатываются быстрее последовательных 6 с), корректная отмена через `StopAsync`, отсутствие активности на пустой базе
 
 Интеграционные тесты (`EventsApi.IntegrationTests`) — xUnit + Testcontainers на реальной
-PostgreSQL. Покрывают применение миграций и все методы обоих репозиториев (см. раздел
+PostgreSQL. Покрывают применение миграций, HTTP pipeline через `WebApplicationFactory`
+и все методы обоих репозиториев (см. раздел
 «Интеграционные тесты»). Требуют запущенного Docker.
 Примечания
 Данные событий и бронирований хранятся в PostgreSQL через EF Core и сохраняются между перезапусками приложения.
-Схема БД создаётся и обновляется миграциями EF Core (`Migrate()` при старте), а не `EnsureCreated()`.
+Схема БД создаётся и обновляется миграциями EF Core
+(`MigrateWithLegacyBaselineAsync()` при старте), а не `EnsureCreated()`.
 Все даты бронирований фиксируются в UTC.
 Период опроса фонового сервиса — 500 мс (`PollingInterval`), имитация задержки внешнего вызова — 2 с (`ProcessingDelay`).

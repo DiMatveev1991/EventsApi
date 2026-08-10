@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        run: dotnet restore EventsApi.sln
+
+      - name: Verify formatting
+        run: dotnet format EventsApi.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build EventsApi.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test EventsApi.sln --configuration Release --no-build
