@@ -75,7 +75,7 @@ public sealed class UserServiceTests
     [Theory]
     [InlineData("missing", "Password123!")]
     [InlineData("user", "wrong")]
-    public async Task LoginAsync_WithInvalidCredentials_ReturnsSameNotFound(
+    public async Task LoginAsync_WithInvalidCredentials_ReturnsSameBadRequest(
         string login,
         string password)
     {
@@ -92,7 +92,8 @@ public sealed class UserServiceTests
         });
 
         await act.Should()
-            .ThrowAsync<NotFoundException>()
+            .ThrowAsync<ValidationException>()
+            .Where(exception => exception.StatusCode == 400)
             .WithMessage("Неверный логин или пароль");
     }
 

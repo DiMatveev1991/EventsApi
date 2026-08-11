@@ -183,6 +183,21 @@ public sealed class BookingServiceTests
     }
 
     [Fact]
+    public async Task CreateBookingAsync_LimitForOneUser_DoesNotAffectAnotherUser()
+    {
+        var ev = AddEvent(totalSeats: BookingService.MaxActiveBookingsPerUser + 1);
+        for (var i = 0; i < BookingService.MaxActiveBookingsPerUser; i++)
+            await _sut.CreateBookingAsync(ev.Id, _userId);
+
+        var anotherUserId = Guid.NewGuid();
+
+        var booking = await _sut.CreateBookingAsync(ev.Id, anotherUserId);
+
+        booking.UserId.Should().Be(anotherUserId);
+        booking.Status.Should().Be(BookingStatus.Pending);
+    }
+
+    [Fact]
     public async Task CancelBookingAsync_ForOwner_CancelsAndReleasesSeat()
     {
         var ev = AddEvent(totalSeats: 1);

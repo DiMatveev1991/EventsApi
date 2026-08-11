@@ -49,7 +49,7 @@ public sealed class UserService : IUserService
 
         var user = await _userRepository.GetByLoginAsync(NormalizeLogin(dto.Login), cancellationToken);
         if (user is null || !_passwordHasher.Verify(dto.Password ?? string.Empty, user.PasswordHash))
-            throw NotFoundException.ForCredentials();
+            throw new ValidationException("Неверный логин или пароль");
 
         return new TokenDto { Token = _tokenService.CreateToken(user) };
     }

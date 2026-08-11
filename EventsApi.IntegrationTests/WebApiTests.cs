@@ -37,7 +37,7 @@ public sealed class WebApiTests : IntegrationTestBase
     }
 
     [Fact]
-    public async Task Login_WithUnknownLoginAndWrongPassword_ReturnsSameNotFoundError()
+    public async Task Login_WithUnknownLoginAndWrongPassword_ReturnsSameBadRequest()
     {
         using var factory = CreateFactory();
         using var client = factory.CreateClient();
@@ -54,8 +54,8 @@ public sealed class WebApiTests : IntegrationTestBase
             password = "WrongPassword!"
         });
 
-        unknownResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        wrongPasswordResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        unknownResponse.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        wrongPasswordResponse.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var unknownProblem = await unknownResponse.Content.ReadFromJsonAsync<ProblemDetails>();
         var wrongProblem = await wrongPasswordResponse.Content.ReadFromJsonAsync<ProblemDetails>();
         unknownProblem!.Detail.Should().Be(wrongProblem!.Detail);

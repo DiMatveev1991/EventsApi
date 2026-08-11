@@ -32,7 +32,7 @@ public sealed class AuthController : ControllerBase
     /// <summary>Получить JWT по логину и паролю.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(TokenDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<TokenDto>> Login(
         [FromBody] LoginDto dto,
         CancellationToken cancellationToken)

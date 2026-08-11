@@ -30,9 +30,6 @@ namespace EventsApi.Domain.Exceptions
 
         public static NotFoundException ForBooking(Guid id) =>
             new($"Бронь с ID {id} не найдена");
-
-        public static NotFoundException ForCredentials() =>
-            new("Неверный логин или пароль");
     }
 
     /// <summary>400 Bad Request — нарушены правила валидации.</summary>
