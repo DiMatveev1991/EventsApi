@@ -18,6 +18,7 @@ namespace EventsApi.Tests;
 /// </summary>
 public class BookingConcurrencyTests : IDisposable
 {
+    private static readonly Guid UserId = Guid.NewGuid();
     private readonly ServiceProvider _serviceProvider;
 
     public BookingConcurrencyTests()
@@ -62,7 +63,7 @@ public class BookingConcurrencyTests : IDisposable
                 var bookingService = scope.ServiceProvider.GetRequiredService<IBookingService>();
                 try
                 {
-                    var booking = await bookingService.CreateBookingAsync(ev.Id);
+                    var booking = await bookingService.CreateBookingAsync(ev.Id, UserId);
                     return (Booking: (BookingDto?)booking, Error: (Exception?)null);
                 }
                 catch (NoAvailableSeatsException ex)
@@ -100,7 +101,7 @@ public class BookingConcurrencyTests : IDisposable
             {
                 using var scope = _serviceProvider.CreateScope();
                 var bookingService = scope.ServiceProvider.GetRequiredService<IBookingService>();
-                return await bookingService.CreateBookingAsync(ev.Id);
+                return await bookingService.CreateBookingAsync(ev.Id, UserId);
             }))
             .ToArray();
 

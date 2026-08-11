@@ -1,5 +1,8 @@
+using System.Security.Claims;
 using EventsApi.Application.Dtos;
 using EventsApi.Application.Services;
+using EventsApi.Domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EventsApi.Presentation.Controllers
@@ -44,6 +47,7 @@ namespace EventsApi.Presentation.Controllers
 
         /// <summary>Создать новое мероприятие</summary>
         [HttpPost]
+        [Authorize(Roles = nameof(UserRole.Admin))]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status201Created)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
         public async Task<ActionResult<EventDto>> Create(
@@ -55,6 +59,7 @@ namespace EventsApi.Presentation.Controllers
 
         /// <summary>Обновить мероприятие целиком</summary>
         [HttpPut("{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -67,6 +72,7 @@ namespace EventsApi.Presentation.Controllers
 
         /// <summary>Удалить мероприятие</summary>
         [HttpDelete("{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
@@ -81,12 +87,14 @@ namespace EventsApi.Presentation.Controllers
         /// Возвращает 409 Conflict, если на событии не осталось свободных мест.
         /// </summary>
         [HttpPost("{id:guid}/book")]
+        [Authorize]
         [ProducesResponseType(typeof(BookingDto), StatusCodes.Status202Accepted)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         public async Task<ActionResult<BookingDto>> Book(Guid id, CancellationToken cancellationToken)
         {
-            var booking = await _bookingService.CreateBookingAsync(id, cancellationToken);
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var booking = await _bookingService.CreateBookingAsync(id, userId, cancellationToken);
 
             var locationUri = Url.Action(
                 action: nameof(BookingsController.GetById),

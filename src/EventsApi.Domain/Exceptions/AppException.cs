@@ -55,4 +55,34 @@ namespace EventsApi.Domain.Exceptions
 
         public NoAvailableSeatsException() : base("No available seats for this event") { }
     }
+
+    /// <summary>400 Bad Request — событие уже началось.</summary>
+    public sealed class EventAlreadyStartedException : AppException
+    {
+        public override int StatusCode => 400;
+
+        public EventAlreadyStartedException() : base("Нельзя забронировать место на уже начавшееся событие") { }
+    }
+
+    /// <summary>409 Conflict — пользователь достиг лимита активных броней.</summary>
+    public sealed class ActiveBookingLimitExceededException : AppException
+    {
+        public override int StatusCode => 409;
+        public int Limit { get; }
+
+        public ActiveBookingLimitExceededException(int limit)
+            : base($"Достигнут лимит активных бронирований: {limit}")
+        {
+            Limit = limit;
+        }
+    }
+
+    /// <summary>403 Forbidden — операция запрещена текущему пользователю.</summary>
+    public sealed class ForbiddenException : AppException
+    {
+        public override int StatusCode => 403;
+
+        public ForbiddenException(string message = "Недостаточно прав для выполнения операции")
+            : base(message) { }
+    }
 }

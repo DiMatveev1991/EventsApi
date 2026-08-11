@@ -41,9 +41,14 @@ namespace EventsApi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("EventId");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("bookings", (string)null);
                 });
@@ -79,6 +84,34 @@ namespace EventsApi.Infrastructure.Persistence.Migrations
                     b.ToTable("events", (string)null);
                 });
 
+            modelBuilder.Entity("EventsApi.Domain.Entities.User", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Login")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Login")
+                        .IsUnique();
+
+                    b.ToTable("users", (string)null);
+                });
+
             modelBuilder.Entity("EventsApi.Domain.Entities.Booking", b =>
                 {
                     b.HasOne("EventsApi.Domain.Entities.Event", "Event")
@@ -87,10 +120,23 @@ namespace EventsApi.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("EventsApi.Domain.Entities.User", "User")
+                        .WithMany("Bookings")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.Navigation("Event");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("EventsApi.Domain.Entities.Event", b =>
+                {
+                    b.Navigation("Bookings");
+                });
+
+            modelBuilder.Entity("EventsApi.Domain.Entities.User", b =>
                 {
                     b.Navigation("Bookings");
                 });

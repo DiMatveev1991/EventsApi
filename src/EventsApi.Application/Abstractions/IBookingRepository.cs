@@ -21,6 +21,9 @@ namespace EventsApi.Application.Abstractions
         /// </summary>
         Task<IReadOnlyList<Guid>> GetPendingIdsAsync(CancellationToken cancellationToken = default);
 
+        /// <summary>Возвращает число активных (Pending/Confirmed) броней пользователя.</summary>
+        Task<int> CountActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken = default);
+
         /// <summary>Добавляет новую бронь и сохраняет изменения.</summary>
         Task AddAsync(Booking booking, CancellationToken cancellationToken = default);
 

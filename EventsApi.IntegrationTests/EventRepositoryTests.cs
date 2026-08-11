@@ -88,7 +88,7 @@ namespace EventsApi.IntegrationTests
         {
             // Arrange
             var ev = TestData.Event(totalSeats: 5);
-            var booking = Booking.CreatePending(ev.Id);
+            var booking = Booking.CreatePending(ev.Id, Guid.Empty);
             await using (var ctx = CreateContext())
             {
                 ctx.Events.Add(ev);

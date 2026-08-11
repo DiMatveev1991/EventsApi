@@ -22,6 +22,9 @@ namespace EventsApi.Infrastructure.Persistence.Configurations
             builder.Property(b => b.EventId)
                 .IsRequired();
 
+            builder.Property(b => b.UserId)
+                .IsRequired();
+
             // Статус храним в БД строкой ("Pending"/"Confirmed"/"Rejected"),
             // а не числом — читаемее при просмотре таблицы.
             builder.Property(b => b.Status)
@@ -42,6 +45,11 @@ namespace EventsApi.Infrastructure.Persistence.Configurations
             builder.HasOne(b => b.Event)
                 .WithMany(e => e.Bookings)
                 .HasForeignKey(b => b.EventId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            builder.HasOne(b => b.User)
+                .WithMany(u => u.Bookings)
+                .HasForeignKey(b => b.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }

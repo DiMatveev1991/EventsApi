@@ -44,7 +44,7 @@ public class BookingProcessorTests : IDisposable
     {
         using var scope = _sp.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var booking = Booking.CreatePending(eventId);
+        var booking = Booking.CreatePending(eventId, Guid.NewGuid());
         db.Bookings.Add(booking);
         await db.SaveChangesAsync();
         return booking.Id;
