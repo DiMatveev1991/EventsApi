@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EventsApi.Domain\EventsApi.Domain.csproj" />
+    <ProjectReference Include="..\BuildingBlocks\Contracts\Contracts.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,7 @@
+using System.Data;
+using Contracts;
 using EventsApi.Application.Abstractions;
+using EventsApi.Application.Messaging;
 using EventsApi.Domain.Entities;
 using EventsApi.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -87,6 +90,40 @@ namespace EventsApi.Infrastructure.Repositories
         {
             _context.Events.Remove(ev);
             await _context.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<BookingConfirmationResult> ApplyBookingConfirmedAsync(
+            BookingConfirmed message,
+            CancellationToken cancellationToken = default)
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable,
+                cancellationToken);
+
+            if (await _context.ProcessedBookingMessages.AnyAsync(
+                    processed => processed.BookingId == message.BookingId,
+                    cancellationToken))
+            {
+                return BookingConfirmationResult.Duplicate;
+            }
+
+            var ev = await _context.Events.SingleOrDefaultAsync(
+                item => item.Id == message.EventId,
+                cancellationToken);
+
+            BookingConfirmationResult result;
+            if (ev is null)
+                result = BookingConfirmationResult.EventNotFound;
+            else if (!ev.TryReserveSeats(message.Seats))
+                result = BookingConfirmationResult.InsufficientSeats;
+            else
+                result = BookingConfirmationResult.Applied;
+
+            _context.ProcessedBookingMessages.Add(
+                ProcessedBookingMessage.Create(message.BookingId, result.ToString()));
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return result;
         }
     }
 }

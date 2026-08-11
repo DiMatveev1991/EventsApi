@@ -20,9 +20,6 @@ namespace EventsApi.Domain.Entities
         /// <summary>Текущее количество доступных мест.</summary>
         public int AvailableSeats { get; set; }
 
-        /// <summary>Навигационное свойство: брони, относящиеся к этому событию.</summary>
-        public ICollection<Booking> Bookings { get; set; } = new List<Booking>();
-
         /// <summary>
         /// Фабричный метод создания события. Валидирует totalSeats:
         /// значение должно быть больше нуля, иначе — <see cref="ValidationException"/>.
@@ -61,17 +58,14 @@ namespace EventsApi.Domain.Entities
         /// </summary>
         public bool TryReserveSeats(int count = 1)
         {
+            if (count <= 0)
+                return false;
+
             if (AvailableSeats < count)
                 return false;
 
             AvailableSeats -= count;
             return true;
-        }
-
-        /// <summary>Возвращает места в пул (например, при отклонении брони).</summary>
-        public void ReleaseSeats(int count = 1)
-        {
-            AvailableSeats = Math.Min(TotalSeats, AvailableSeats + count);
         }
     }
 }

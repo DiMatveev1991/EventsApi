@@ -1,5 +1,4 @@
-using EventsApi.Application.Abstractions;
-using EventsApi.Application.BackgroundServices;
+using EventsApi.Application.Messaging;
 using EventsApi.Application.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,16 +12,8 @@ namespace EventsApi.Application.DependencyInjection
     {
         public static IServiceCollection AddApplicationServices(this IServiceCollection services)
         {
-            // Один менеджер на процесс; внутри блокировки разделены по EventId.
-            services.AddSingleton<IEventBookingLock, EventBookingLock>();
-
-            // Сервисы приложения — scoped, т. к. зависят от scoped-репозиториев.
             services.AddScoped<IEventService, EventService>();
-            services.AddScoped<IBookingService, BookingService>();
-            services.AddScoped<IUserService, UserService>();
-
-            // Фоновая обработка Pending-броней.
-            services.AddHostedService<BookingProcessor>();
+            services.AddScoped<IBookingConfirmedHandler, BookingConfirmedHandler>();
 
             return services;
         }

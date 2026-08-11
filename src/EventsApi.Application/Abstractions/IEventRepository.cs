@@ -1,4 +1,6 @@
 using EventsApi.Domain.Entities;
+using Contracts;
+using EventsApi.Application.Messaging;
 
 namespace EventsApi.Application.Abstractions
 {
@@ -42,5 +44,12 @@ namespace EventsApi.Application.Abstractions
 
         /// <summary>Удаляет событие и сохраняет изменения.</summary>
         Task DeleteAsync(Event ev, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Atomically applies an integration event and records its BookingId in the inbox.
+        /// </summary>
+        Task<BookingConfirmationResult> ApplyBookingConfirmedAsync(
+            BookingConfirmed message,
+            CancellationToken cancellationToken = default);
     }
 }

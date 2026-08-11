@@ -1,5 +1,5 @@
-using EventsApi.Infrastructure.Security;
 using FluentAssertions;
+using Users.Infrastructure.Security;
 using Xunit;
 
 namespace EventsApi.Tests;
@@ -7,15 +7,15 @@ namespace EventsApi.Tests;
 public sealed class SecurityTests
 {
     [Fact]
-    public void Sha256PasswordHasher_HashesAndVerifiesPassword()
+    public void Pbkdf2_hash_is_salted_and_verifiable()
     {
-        var sut = new Sha256PasswordHasher();
+        var hasher = new Pbkdf2PasswordHasher();
 
-        var hash = sut.Hash("Password123!");
+        var first = hasher.Hash("Password123!");
+        var second = hasher.Hash("Password123!");
 
-        hash.Should().HaveLength(64);
-        hash.Should().NotContain("Password123!");
-        sut.Verify("Password123!", hash).Should().BeTrue();
-        sut.Verify("WrongPassword!", hash).Should().BeFalse();
+        first.Should().NotBe(second);
+        hasher.Verify("Password123!", first).Should().BeTrue();
+        hasher.Verify("wrong", first).Should().BeFalse();
     }
 }

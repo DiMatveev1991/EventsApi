@@ -42,11 +42,6 @@ namespace EventsApi.Infrastructure.Persistence.Configurations
             builder.Property(e => e.AvailableSeats)
                 .IsRequired();
 
-            // Связь «один–ко–многим» с бронированиями через навигационные свойства.
-            builder.HasMany(e => e.Bookings)
-                .WithOne(b => b.Event)
-                .HasForeignKey(b => b.EventId)
-                .OnDelete(DeleteBehavior.Cascade);
         }
     }
 }
