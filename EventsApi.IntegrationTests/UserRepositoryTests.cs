@@ -8,12 +8,13 @@ using Xunit;
 
 namespace EventsApi.IntegrationTests;
 
-public sealed class UserRepositoryTests
+[Collection(PostgreSqlCollection.Name)]
+public sealed class UserRepositoryTests(PostgreSqlFixture fixture)
 {
     [Fact]
     public async Task Add_and_lookup_persist_user()
     {
-        await using var database = await SqliteTestDatabase.CreateUsersAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateUsersAsync(fixture);
         var repository = new UserRepository(database.Context);
         var user = User.Create("  Dmitry  ", "hash", UserRole.Admin);
 
@@ -29,7 +30,7 @@ public sealed class UserRepositoryTests
     [Fact]
     public async Task Lookup_unknown_login_returns_null()
     {
-        await using var database = await SqliteTestDatabase.CreateUsersAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateUsersAsync(fixture);
         var repository = new UserRepository(database.Context);
 
         var stored = await repository.GetByLoginAsync("missing");
@@ -40,7 +41,7 @@ public sealed class UserRepositoryTests
     [Fact]
     public async Task Unique_index_rejects_duplicate_normalized_login()
     {
-        await using var database = await SqliteTestDatabase.CreateUsersAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateUsersAsync(fixture);
         var repository = new UserRepository(database.Context);
         await repository.AddAsync(User.Create("user", "hash-one", UserRole.User));
 

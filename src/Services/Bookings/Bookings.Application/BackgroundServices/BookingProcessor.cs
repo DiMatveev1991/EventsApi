@@ -4,6 +4,7 @@ using Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Bookings.Application.BackgroundServices;
 
@@ -13,10 +14,10 @@ namespace Bookings.Application.BackgroundServices;
 /// </summary>
 public sealed class BookingProcessor(
     IServiceScopeFactory scopeFactory,
-    ILogger<BookingProcessor> logger) : BackgroundService
+    ILogger<BookingProcessor> logger,
+    IOptions<BookingProcessingOptions> options) : BackgroundService
 {
-    private static readonly TimeSpan ConfirmationDelay = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan PollingInterval = TimeSpan.FromMilliseconds(500);
+    private readonly BookingProcessingOptions _options = options.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -26,7 +27,7 @@ public sealed class BookingProcessor(
             {
                 var ids = await FindWorkAsync(stoppingToken);
                 await Task.WhenAll(ids.Select(id => ProcessAsync(id, stoppingToken)));
-                await Task.Delay(PollingInterval, stoppingToken);
+                await Task.Delay(_options.PollingInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -35,7 +36,7 @@ public sealed class BookingProcessor(
             catch (Exception exception)
             {
                 logger.LogError(exception, "Booking processing cycle failed");
-                await Task.Delay(PollingInterval, stoppingToken);
+                await Task.Delay(_options.PollingInterval, stoppingToken);
             }
         }
     }
@@ -53,7 +54,8 @@ public sealed class BookingProcessor(
     {
         try
         {
-            await Task.Delay(ConfirmationDelay, cancellationToken);
+            if (_options.ConfirmationDelay > TimeSpan.Zero)
+                await Task.Delay(_options.ConfirmationDelay, cancellationToken);
             using var scope = scopeFactory.CreateScope();
             var repository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
             var publisher = scope.ServiceProvider.GetRequiredService<IBookingEventPublisher>();

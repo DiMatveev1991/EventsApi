@@ -7,6 +7,7 @@ using Contracts;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace EventsApi.Tests;
@@ -22,7 +23,8 @@ public sealed class BookingProcessorTests
         using var provider = BuildProvider(repository, publisher);
         var processor = new BookingProcessor(
             provider.GetRequiredService<IServiceScopeFactory>(),
-            NullLogger<BookingProcessor>.Instance);
+            NullLogger<BookingProcessor>.Instance,
+            Options.Create(new BookingProcessingOptions()));
 
         await InvokeProcessAsync(processor, booking.Id);
 
@@ -46,7 +48,8 @@ public sealed class BookingProcessorTests
         using var provider = BuildProvider(repository, publisher);
         var processor = new BookingProcessor(
             provider.GetRequiredService<IServiceScopeFactory>(),
-            NullLogger<BookingProcessor>.Instance);
+            NullLogger<BookingProcessor>.Instance,
+            Options.Create(new BookingProcessingOptions()));
 
         await InvokeProcessAsync(processor, booking.Id);
 

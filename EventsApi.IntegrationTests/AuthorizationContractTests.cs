@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Users.Presentation.Controllers;
 using Xunit;
 
-namespace EventsApi.Tests;
+namespace EventsApi.IntegrationTests;
 
 public sealed class AuthorizationContractTests
 {

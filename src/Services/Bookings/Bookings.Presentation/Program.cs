@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using Bookings.Application.DependencyInjection;
+using Bookings.Application.BackgroundServices;
 using Bookings.Infrastructure.DependencyInjection;
 using Bookings.Infrastructure.Persistence;
 using Bookings.Presentation.Middleware;
@@ -13,6 +14,13 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddBookingsApplication();
+builder.Services.AddOptions<BookingProcessingOptions>()
+    .Bind(builder.Configuration.GetSection(BookingProcessingOptions.SectionName))
+    .Validate(options => options.ConfirmationDelay >= TimeSpan.Zero,
+        "BookingProcessing:ConfirmationDelay cannot be negative.")
+    .Validate(options => options.PollingInterval > TimeSpan.Zero,
+        "BookingProcessing:PollingInterval must be positive.")
+    .ValidateOnStart();
 builder.Services.AddBookingsInfrastructure(builder.Configuration);
 builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
@@ -82,7 +90,7 @@ app.UseSwaggerUI();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
+app.MapHealthChecks("/health").AllowAnonymous();
 app.Run();
 
 public partial class Program { }

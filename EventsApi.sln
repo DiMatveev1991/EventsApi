@@ -4,13 +4,13 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Contracts", "src\BuildingBlocks\Contracts\Contracts.csproj", "{A1111111-1111-4111-8111-111111111111}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventsApi.Domain", "src\EventsApi.Domain\EventsApi.Domain.csproj", "{A2222222-2222-4222-8222-222222222222}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Events.Domain", "src\Services\Events\Events.Domain\Events.Domain.csproj", "{A2222222-2222-4222-8222-222222222222}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventsApi.Application", "src\EventsApi.Application\EventsApi.Application.csproj", "{A3333333-3333-4333-8333-333333333333}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Events.Application", "src\Services\Events\Events.Application\Events.Application.csproj", "{A3333333-3333-4333-8333-333333333333}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventsApi.Infrastructure", "src\EventsApi.Infrastructure\EventsApi.Infrastructure.csproj", "{A4444444-4444-4444-8444-444444444444}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Events.Infrastructure", "src\Services\Events\Events.Infrastructure\Events.Infrastructure.csproj", "{A4444444-4444-4444-8444-444444444444}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EventsApi.Presentation", "src\EventsApi.Presentation\EventsApi.Presentation.csproj", "{A5555555-5555-4555-8555-555555555555}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Events.Presentation", "src\Services\Events\Events.Presentation\Events.Presentation.csproj", "{A5555555-5555-4555-8555-555555555555}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Users.Domain", "src\Services\Users\Users.Domain\Users.Domain.csproj", "{B1111111-1111-4111-8111-111111111111}"
 EndProject

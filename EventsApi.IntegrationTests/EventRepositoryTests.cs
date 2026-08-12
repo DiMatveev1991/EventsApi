@@ -9,12 +9,13 @@ using Xunit;
 
 namespace EventsApi.IntegrationTests;
 
-public sealed class EventRepositoryTests
+[Collection(PostgreSqlCollection.Name)]
+public sealed class EventRepositoryTests(PostgreSqlFixture fixture)
 {
     [Fact]
     public async Task Add_persists_event_and_capacity()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(5);
 
@@ -30,7 +31,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Get_unknown_event_returns_null()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
 
         (await repository.GetByIdAsync(Guid.NewGuid())).Should().BeNull();
@@ -39,7 +40,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Update_persists_changed_fields()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(5);
         await repository.AddAsync(ev);
@@ -54,7 +55,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Delete_removes_event()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(5);
         await repository.AddAsync(ev);
@@ -67,7 +68,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Booking_confirmation_decrements_available_seats()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(5);
         await repository.AddAsync(ev);
@@ -81,7 +82,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Duplicate_booking_confirmation_is_idempotent()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(5);
         await repository.AddAsync(ev);
@@ -97,9 +98,34 @@ public sealed class EventRepositoryTests
     }
 
     [Fact]
+    public async Task Concurrent_duplicate_confirmation_is_applied_once_on_postgresql()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
+        var setupRepository = new EventRepository(database.Context);
+        var ev = CreateEvent(5);
+        await setupRepository.AddAsync(ev);
+        database.Context.ChangeTracker.Clear();
+
+        await using var secondContext =
+            PostgreSqlTestDatabase.CreateEventsContext(database.ConnectionString);
+        var message = Message(ev.Id, 2);
+        var results = await Task.WhenAll(
+            new EventRepository(database.Context).ApplyBookingConfirmedAsync(message),
+            new EventRepository(secondContext).ApplyBookingConfirmedAsync(message));
+
+        results.Should().ContainSingle(result => result == BookingConfirmationResult.Applied);
+        results.Should().ContainSingle(result => result == BookingConfirmationResult.Duplicate);
+
+        database.Context.ChangeTracker.Clear();
+        var stored = await setupRepository.GetByIdAsync(ev.Id);
+        stored!.AvailableSeats.Should().Be(3);
+        (await database.Context.ProcessedBookingMessages.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
     public async Task Missing_event_is_recorded_and_does_not_break_consumer_flow()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var message = Message(Guid.NewGuid(), 1);
 
@@ -113,7 +139,7 @@ public sealed class EventRepositoryTests
     [Fact]
     public async Task Insufficient_capacity_does_not_make_seats_negative()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var ev = CreateEvent(1);
         await repository.AddAsync(ev);

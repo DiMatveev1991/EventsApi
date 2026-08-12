@@ -16,6 +16,7 @@ public static class InfrastructureExtensions
     {
         services.AddDbContext<UsersDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("UsersDatabase")));
+        services.AddHealthChecks().AddDbContextCheck<UsersDbContext>("database");
         services.AddScoped<IUserRepository, UserRepository>();
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();

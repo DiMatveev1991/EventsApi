@@ -5,6 +5,7 @@ using EventsApi.Application.Messaging;
 using EventsApi.Domain.Entities;
 using EventsApi.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace EventsApi.Infrastructure.Repositories
 {
@@ -96,6 +97,26 @@ namespace EventsApi.Infrastructure.Repositories
             BookingConfirmed message,
             CancellationToken cancellationToken = default)
         {
+            const int maxAttempts = 3;
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await ApplyBookingConfirmedOnceAsync(message, cancellationToken);
+                }
+                catch (Exception exception) when (
+                    attempt < maxAttempts && IsRetryableConcurrencyFailure(exception))
+                {
+                    _context.ChangeTracker.Clear();
+                    await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
+                }
+            }
+        }
+
+        private async Task<BookingConfirmationResult> ApplyBookingConfirmedOnceAsync(
+            BookingConfirmed message,
+            CancellationToken cancellationToken)
+        {
             await using var transaction = await _context.Database.BeginTransactionAsync(
                 IsolationLevel.Serializable,
                 cancellationToken);
@@ -124,6 +145,17 @@ namespace EventsApi.Infrastructure.Repositories
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return result;
+        }
+
+        private static bool IsRetryableConcurrencyFailure(Exception exception)
+        {
+            var postgresException = exception as PostgresException
+                ?? exception.InnerException as PostgresException;
+
+            return postgresException?.SqlState is
+                PostgresErrorCodes.SerializationFailure or
+                PostgresErrorCodes.DeadlockDetected or
+                PostgresErrorCodes.UniqueViolation;
         }
     }
 }

@@ -29,14 +29,11 @@
     <ProjectReference Include="..\src\Services\Users\Users.Application\Users.Application.csproj" />
     <ProjectReference Include="..\src\Services\Users\Users.Domain\Users.Domain.csproj" />
     <ProjectReference Include="..\src\Services\Users\Users.Infrastructure\Users.Infrastructure.csproj" />
-    <ProjectReference Include="..\src\Services\Users\Users.Presentation\Users.Presentation.csproj" />
     <ProjectReference Include="..\src\Services\Bookings\Bookings.Application\Bookings.Application.csproj" />
     <ProjectReference Include="..\src\Services\Bookings\Bookings.Domain\Bookings.Domain.csproj" />
-    <ProjectReference Include="..\src\Services\Bookings\Bookings.Presentation\Bookings.Presentation.csproj" />
-    <ProjectReference Include="..\src\EventsApi.Domain\EventsApi.Domain.csproj" />
-    <ProjectReference Include="..\src\EventsApi.Application\EventsApi.Application.csproj" />
-    <ProjectReference Include="..\src\EventsApi.Infrastructure\EventsApi.Infrastructure.csproj" />
-    <ProjectReference Include="..\src\EventsApi.Presentation\EventsApi.Presentation.csproj" />
+    <ProjectReference Include="..\src\Services\Events\Events.Domain\Events.Domain.csproj" />
+    <ProjectReference Include="..\src\Services\Events\Events.Application\Events.Application.csproj" />
+    <ProjectReference Include="..\src\Services\Events\Events.Infrastructure\Events.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
