@@ -6,11 +6,13 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Bookings.Presentation.Controllers;
 
+/// <summary>Предоставляет HTTP API для создания, просмотра и отмены бронирований.</summary>
 [ApiController]
 [Authorize]
 [Route("bookings")]
 public sealed class BookingsController(IBookingService bookings) : ControllerBase
 {
+    /// <summary>Создаёт бронирование от имени текущего пользователя.</summary>
     [HttpPost]
     [ProducesResponseType<BookingResponse>(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -22,6 +24,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
         return AcceptedAtAction(nameof(GetById), new { id = response.Id }, response);
     }
 
+    /// <summary>Возвращает бронирование владельцу или администратору.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType<BookingResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<BookingResponse>> GetById(
@@ -36,6 +39,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
         return Ok(response);
     }
 
+    /// <summary>Отменяет бронирование владельца или администратора.</summary>
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Cancel(Guid id, CancellationToken cancellationToken)
@@ -48,6 +52,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
         return NoContent();
     }
 
+    /// <summary>Извлекает идентификатор текущего пользователя из JWT.</summary>
     private Guid CurrentUserId() =>
         Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
             ? userId

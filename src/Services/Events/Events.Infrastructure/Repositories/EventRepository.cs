@@ -17,11 +17,13 @@ namespace EventsApi.Infrastructure.Repositories
     {
         private readonly AppDbContext _context;
 
+        /// <summary>Создаёт репозиторий поверх scoped-контекста Events.</summary>
         public EventRepository(AppDbContext context)
         {
             _context = context;
         }
 
+        /// <summary>Возвращает детерминированно отсортированную страницу событий.</summary>
         public async Task<(IReadOnlyList<Event> Items, int TotalCount)> GetPagedAsync(
             string? title,
             DateTimeOffset? from,
@@ -69,12 +71,14 @@ namespace EventsApi.Infrastructure.Repositories
             return (items, totalCount);
         }
 
+        /// <summary>Возвращает отслеживаемое событие по идентификатору.</summary>
         public async Task<Event?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
             return await _context.Events
                 .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
         }
 
+        /// <summary>Возвращает события с наибольшей долей проданных мест.</summary>
         public async Task<IReadOnlyList<Event>> GetTopPopularAsync(
             int count,
             CancellationToken cancellationToken = default)
@@ -82,6 +86,8 @@ namespace EventsApi.Infrastructure.Repositories
             if (count <= 0)
                 return Array.Empty<Event>();
 
+            // Деление выполняется в SQL до Take, поэтому из БД возвращается
+            // только нужное количество уже отсортированных записей.
             return await _context.Events
                 .AsNoTracking()
                 .Where(e => e.TotalSeats > 0)
@@ -92,24 +98,28 @@ namespace EventsApi.Infrastructure.Repositories
                 .ToListAsync(cancellationToken);
         }
 
+        /// <summary>Добавляет событие и фиксирует изменения в PostgreSQL.</summary>
         public async Task AddAsync(Event ev, CancellationToken cancellationToken = default)
         {
             _context.Events.Add(ev);
             await _context.SaveChangesAsync(cancellationToken);
         }
 
+        /// <summary>Фиксирует изменения отслеживаемого события.</summary>
         public async Task UpdateAsync(Event ev, CancellationToken cancellationToken = default)
         {
             // Сущность уже отслеживается контекстом — достаточно сохранить изменения.
             await _context.SaveChangesAsync(cancellationToken);
         }
 
+        /// <summary>Удаляет событие и фиксирует изменения в PostgreSQL.</summary>
         public async Task DeleteAsync(Event ev, CancellationToken cancellationToken = default)
         {
             _context.Events.Remove(ev);
             await _context.SaveChangesAsync(cancellationToken);
         }
 
+        /// <summary>Применяет подтверждение с ограниченными повторами конфликтов PostgreSQL.</summary>
         public async Task<BookingConfirmationResult> ApplyBookingConfirmedAsync(
             BookingConfirmed message,
             CancellationToken cancellationToken = default)
@@ -124,12 +134,15 @@ namespace EventsApi.Infrastructure.Repositories
                 catch (Exception exception) when (
                     attempt < maxAttempts && IsRetryableConcurrencyFailure(exception))
                 {
+                    // После rollback EF может хранить устаревшие состояния; очищаем
+                    // tracker перед повтором Serializable-транзакции.
                     _context.ChangeTracker.Clear();
                     await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
                 }
             }
         }
 
+        /// <summary>Атомарно применяет одно сообщение и записывает inbox-маркер.</summary>
         private async Task<BookingConfirmationResult> ApplyBookingConfirmedOnceAsync(
             BookingConfirmed message,
             CancellationToken cancellationToken)
@@ -138,6 +151,8 @@ namespace EventsApi.Infrastructure.Repositories
                 IsolationLevel.Serializable,
                 cancellationToken);
 
+            // Проверка inbox и изменение мест входят в одну транзакцию, поэтому
+            // повторная доставка не может уменьшить AvailableSeats второй раз.
             if (await _context.ProcessedBookingMessages.AnyAsync(
                     processed => processed.BookingId == message.BookingId,
                     cancellationToken))
@@ -157,6 +172,8 @@ namespace EventsApi.Infrastructure.Repositories
             else
                 result = BookingConfirmationResult.Applied;
 
+            // Даже бизнес-отказ записывается в inbox: повтор того же неизменяемого
+            // сообщения не должен бесконечно возвращаться из Kafka.
             _context.ProcessedBookingMessages.Add(
                 ProcessedBookingMessage.Create(message.BookingId, result.ToString()));
             await _context.SaveChangesAsync(cancellationToken);
@@ -164,6 +181,7 @@ namespace EventsApi.Infrastructure.Repositories
             return result;
         }
 
+        /// <summary>Определяет, можно ли безопасно повторить транзакцию после конфликта.</summary>
         private static bool IsRetryableConcurrencyFailure(Exception exception)
         {
             var postgresException = exception as PostgresException

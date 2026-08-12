@@ -3,12 +3,14 @@ using Users.Application.Abstractions;
 
 namespace Users.Infrastructure.Security;
 
+/// <summary>Хеширует пароли PBKDF2-SHA256 с уникальной случайной солью.</summary>
 public sealed class Pbkdf2PasswordHasher : IPasswordHasher
 {
     private const int Iterations = 100_000;
     private const int SaltSize = 16;
     private const int HashSize = 32;
 
+    /// <summary>Создаёт хеш в формате iterations.salt.hash.</summary>
     public string Hash(string password)
     {
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
@@ -22,6 +24,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         return $"{Iterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
     }
 
+    /// <summary>Проверяет пароль с использованием параметров сохранённого хеша.</summary>
     public bool Verify(string password, string passwordHash)
     {
         var parts = passwordHash.Split('.', 3);
@@ -39,6 +42,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 HashAlgorithmName.SHA256,
                 expected.Length);
 
+            // Сравнение с постоянным временем не раскрывает совпавший префикс хеша.
             return CryptographicOperations.FixedTimeEquals(actual, expected);
         }
         catch (FormatException)

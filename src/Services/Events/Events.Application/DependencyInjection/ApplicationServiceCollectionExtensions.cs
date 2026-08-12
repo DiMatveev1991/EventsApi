@@ -10,8 +10,11 @@ namespace EventsApi.Application.DependencyInjection
     /// </summary>
     public static class ApplicationServiceCollectionExtensions
     {
+        /// <summary>Регистрирует прикладные сценарии Events в DI-контейнере.</summary>
         public static IServiceCollection AddApplicationServices(this IServiceCollection services)
         {
+            // Сервисы scoped, потому что каждый HTTP-запрос или Kafka-сообщение
+            // должно работать со своим scoped-репозиторием и DbContext.
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IBookingConfirmedHandler, BookingConfirmedHandler>();
 

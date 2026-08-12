@@ -5,11 +5,13 @@ using Users.Domain.Exceptions;
 
 namespace Users.Application.Services;
 
+/// <summary>Реализует регистрацию и аутентификацию пользователей.</summary>
 public sealed class UserService(
     IUserRepository users,
     IPasswordHasher passwordHasher,
     ITokenService tokenService) : IUserService
 {
+    /// <summary>Создаёт пользователя с нормализованным логином и хешем пароля.</summary>
     public async Task RegisterAsync(
         RegisterUserRequest request,
         CancellationToken cancellationToken = default)
@@ -22,6 +24,7 @@ public sealed class UserService(
         await users.AddAsync(user, cancellationToken);
     }
 
+    /// <summary>Проверяет учётные данные и выпускает JWT.</summary>
     public async Task<TokenResponse> LoginAsync(
         LoginRequest request,
         CancellationToken cancellationToken = default)
@@ -33,5 +36,6 @@ public sealed class UserService(
         return new TokenResponse(tokenService.CreateToken(user));
     }
 
+    /// <summary>Приводит логин к единому регистронезависимому формату.</summary>
     private static string NormalizeLogin(string login) => login.Trim().ToLowerInvariant();
 }

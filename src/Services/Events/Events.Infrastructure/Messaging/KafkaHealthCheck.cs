@@ -4,8 +4,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace EventsApi.Infrastructure.Messaging;
 
+/// <summary>Проверяет доступность хотя бы одного брокера Kafka.</summary>
 public sealed class KafkaHealthCheck(IConfiguration configuration) : IHealthCheck
 {
+    /// <summary>Получает метаданные кластера и возвращает состояние Kafka.</summary>
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)

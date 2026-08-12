@@ -16,6 +16,7 @@ public sealed class RedisCacheService : ICacheService
     private readonly IDatabase _database;
     private readonly ILogger<RedisCacheService> _logger;
 
+    /// <summary>Создаёт адаптер поверх общего подключения StackExchange.Redis.</summary>
     public RedisCacheService(
         IConnectionMultiplexer connection,
         ILogger<RedisCacheService> logger)
@@ -24,6 +25,7 @@ public sealed class RedisCacheService : ICacheService
         _logger = logger;
     }
 
+    /// <summary>Возвращает значение из Redis либо <c>null</c> при промахе или сбое.</summary>
     public async Task<T?> GetAsync<T>(
         string key,
         CancellationToken cancellationToken = default)
@@ -39,11 +41,13 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Кеш — необязательная оптимизация: ошибка чтения эквивалентна промаху.
             _logger.LogWarning(exception, "Redis read failed for key {CacheKey}", key);
             return null;
         }
     }
 
+    /// <summary>Сохраняет сериализованное значение в Redis с указанным TTL.</summary>
     public async Task SetAsync<T>(
         string key,
         T value,
@@ -59,10 +63,12 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            // Сбой Redis не должен отменять уже успешно выполненную операцию в БД.
             _logger.LogWarning(exception, "Redis write failed for key {CacheKey}", key);
         }
     }
 
+    /// <summary>Удаляет ключ из Redis, не прерывая основной сценарий при сбое кеша.</summary>
     public async Task RemoveAsync(
         string key,
         CancellationToken cancellationToken = default)

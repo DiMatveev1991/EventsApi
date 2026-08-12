@@ -2,16 +2,27 @@ using EventsApi.Domain.Exceptions;
 
 namespace EventsApi.Domain.Entities
 {
+    /// <summary>Доменная сущность события с учётом вместимости.</summary>
     public class Event
     {
         // Приватный конструктор без параметров нужен EF Core: провайдер создаёт
         // экземпляры через рефлексию при чтении данных из БД.
+        /// <summary>Создаёт пустой экземпляр для материализации EF Core.</summary>
         private Event() { }
 
+        /// <summary>Идентификатор события.</summary>
         public Guid Id { get; set; }
+
+        /// <summary>Название события.</summary>
         public string Title { get; set; } = string.Empty;
+
+        /// <summary>Необязательное описание события.</summary>
         public string? Description { get; set; }
+
+        /// <summary>Дата и время начала события.</summary>
         public DateTimeOffset StartAt { get; set; }
+
+        /// <summary>Дата и время окончания события.</summary>
         public DateTimeOffset EndAt { get; set; }
 
         /// <summary>Общее количество мест на событии.</summary>

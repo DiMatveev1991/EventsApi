@@ -7,12 +7,16 @@ using Microsoft.Extensions.Options;
 
 namespace EventsApi.Application.Services
 {
+    /// <summary>
+    /// Реализует прикладные сценарии Events и координирует PostgreSQL с кешем.
+    /// </summary>
     public class EventService : IEventService
     {
         private readonly IEventRepository _repository;
         private readonly ICacheService _cache;
         private readonly CacheOptions _cacheOptions;
 
+        /// <summary>Создаёт сервис событий с репозиторием и абстракцией кеша.</summary>
         public EventService(
             IEventRepository repository,
             ICacheService cache,
@@ -23,6 +27,7 @@ namespace EventsApi.Application.Services
             _cacheOptions = cacheOptions.Value;
         }
 
+        /// <summary>Возвращает страницу событий с фильтрацией и нормализованной пагинацией.</summary>
         public async Task<PaginatedResult<EventDto>> GetAllAsync(
             EventQueryParameters query, CancellationToken cancellationToken = default)
         {
@@ -45,6 +50,7 @@ namespace EventsApi.Application.Services
             return new PaginatedResult<EventDto>(items, totalCount, page, pageSize);
         }
 
+        /// <summary>Возвращает событие по идентификатору по паттерну Cache-Aside.</summary>
         public async Task<EventDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
             var key = CacheKeys.Event(id);
@@ -52,6 +58,7 @@ namespace EventsApi.Application.Services
             if (cached is not null)
                 return cached;
 
+            // Redis не является источником истины: промах или сбой переводит чтение в PostgreSQL.
             var ev = await _repository.GetByIdAsync(id, cancellationToken)
                 ?? throw NotFoundException.ForEvent(id);
 
@@ -60,6 +67,7 @@ namespace EventsApi.Application.Services
             return result;
         }
 
+        /// <summary>Возвращает кешируемый по TTL рейтинг из десяти популярных событий.</summary>
         public async Task<IReadOnlyList<PopularEventDto>> GetTopPopularAsync(
             CancellationToken cancellationToken = default)
         {
@@ -69,6 +77,8 @@ namespace EventsApi.Application.Services
             if (cached is not null)
                 return cached;
 
+            // Топ — допустимо слегка устаревающий агрегат, поэтому он обновляется
+            // только по TTL и не инвалидируется при каждом бронировании.
             var events = await _repository.GetTopPopularAsync(10, cancellationToken);
             var result = events.Select(MapToPopularDto).ToList();
             await _cache.SetAsync(
@@ -79,6 +89,7 @@ namespace EventsApi.Application.Services
             return result;
         }
 
+        /// <summary>Создаёт событие и после фиксации в БД инвалидирует его ключ кеша.</summary>
         public async Task<EventDto> CreateAsync(CreateEventDto dto, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(dto);
@@ -109,6 +120,7 @@ namespace EventsApi.Application.Services
             return MapToDto(ev);
         }
 
+        /// <summary>Обновляет событие и после фиксации в БД инвалидирует его кеш.</summary>
         public async Task<EventDto> UpdateAsync(Guid id, UpdateEventDto dto, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(dto);
@@ -130,6 +142,7 @@ namespace EventsApi.Application.Services
             return MapToDto(ev);
         }
 
+        /// <summary>Удаляет событие и после фиксации в БД удаляет его ключ кеша.</summary>
         public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
         {
             var ev = await _repository.GetByIdAsync(id, cancellationToken)
@@ -160,6 +173,7 @@ namespace EventsApi.Application.Services
             }
         }
 
+        /// <summary>Добавляет сообщение в коллекцию ошибок заданного поля.</summary>
         private static void AddError(Dictionary<string, List<string>> bag, string key, string msg)
         {
             if (!bag.TryGetValue(key, out var list))
@@ -170,6 +184,7 @@ namespace EventsApi.Application.Services
             list.Add(msg);
         }
 
+        /// <summary>Преобразует доменную сущность в DTO API.</summary>
         private static EventDto MapToDto(Event ev) => new()
         {
             Id = ev.Id,
@@ -181,6 +196,7 @@ namespace EventsApi.Application.Services
             AvailableSeats = ev.AvailableSeats
         };
 
+        /// <summary>Преобразует событие в элемент рейтинга и рассчитывает процент продаж.</summary>
         private static PopularEventDto MapToPopularDto(Event ev) => new()
         {
             Id = ev.Id,

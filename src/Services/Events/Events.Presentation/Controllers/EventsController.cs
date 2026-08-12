@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace EventsApi.Presentation.Controllers
 {
+    /// <summary>Предоставляет HTTP API управления событиями и чтения рейтинга.</summary>
     [ApiController]
     [Route("events")]
     public class EventsController(IEventService eventService) : ControllerBase

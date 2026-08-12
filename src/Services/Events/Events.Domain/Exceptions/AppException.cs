@@ -12,9 +12,13 @@ namespace EventsApi.Domain.Exceptions
     /// </remarks>
     public abstract class AppException : Exception
     {
+        /// <summary>HTTP-код, соответствующий ожидаемой ошибке приложения.</summary>
         public abstract int StatusCode { get; }
 
+        /// <summary>Создаёт исключение с пользовательским сообщением.</summary>
         protected AppException(string message) : base(message) { }
+
+        /// <summary>Создаёт исключение с сообщением и исходной причиной.</summary>
         protected AppException(string message, Exception inner) : base(message, inner) { }
     }
 
@@ -23,8 +27,10 @@ namespace EventsApi.Domain.Exceptions
     {
         public override int StatusCode => 404;
 
+        /// <summary>Создаёт исключение отсутствующего ресурса.</summary>
         public NotFoundException(string message) : base(message) { }
 
+        /// <summary>Создаёт исключение для отсутствующего события.</summary>
         public static NotFoundException ForEvent(Guid id) =>
             new($"Мероприятие с ID {id} не найдено");
 
@@ -35,10 +41,13 @@ namespace EventsApi.Domain.Exceptions
     {
         public override int StatusCode => 400;
 
+        /// <summary>Ошибки, сгруппированные по именам полей.</summary>
         public IReadOnlyDictionary<string, string[]>? Errors { get; }
 
+        /// <summary>Создаёт исключение валидации без детализации по полям.</summary>
         public ValidationException(string message) : base(message) { }
 
+        /// <summary>Создаёт исключение валидации с ошибками отдельных полей.</summary>
         public ValidationException(string message, IReadOnlyDictionary<string, string[]> errors)
             : base(message)
         {

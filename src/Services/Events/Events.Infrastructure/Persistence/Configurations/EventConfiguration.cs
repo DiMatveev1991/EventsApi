@@ -9,6 +9,7 @@ namespace EventsApi.Infrastructure.Persistence.Configurations
     /// </summary>
     public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
     {
+        /// <summary>Настраивает таблицу, ограничения и типы столбцов события.</summary>
         public void Configure(EntityTypeBuilder<Event> builder)
         {
             builder.ToTable("events");

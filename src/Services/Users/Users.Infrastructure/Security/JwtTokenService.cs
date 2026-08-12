@@ -8,8 +8,10 @@ using Users.Domain.Entities;
 
 namespace Users.Infrastructure.Security;
 
+/// <summary>Выпускает подписанные JWT для общей авторизации сервисов.</summary>
 public sealed class JwtTokenService(IOptions<JwtOptions> options) : ITokenService
 {
+    /// <summary>Создаёт JWT с идентификатором, именем и ролью пользователя.</summary>
     public string CreateToken(User user)
     {
         var jwt = options.Value;
@@ -18,6 +20,8 @@ public sealed class JwtTokenService(IOptions<JwtOptions> options) : ITokenServic
 
         var claims = new[]
         {
+            // sub соответствует стандарту JWT, а NameIdentifier нужен стандартной
+            // модели claims ASP.NET Core и контроллерам остальных сервисов.
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new Claim(ClaimTypes.Name, user.Login),

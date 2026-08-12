@@ -4,8 +4,10 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace Bookings.Infrastructure.Persistence.Configurations;
 
+/// <summary>Настраивает отображение сущности бронирования в PostgreSQL.</summary>
 public sealed class BookingConfiguration : IEntityTypeConfiguration<Booking>
 {
+    /// <summary>Настраивает таблицу, типы полей и индексы бронирований.</summary>
     public void Configure(EntityTypeBuilder<Booking> builder)
     {
         builder.ToTable("bookings");

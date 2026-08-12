@@ -4,10 +4,14 @@ using EventsApi.Application.Caching;
 
 namespace EventsApi.Application.Messaging;
 
+/// <summary>
+/// Применяет подтверждение бронирования и инвалидирует кеш изменённого события.
+/// </summary>
 public sealed class BookingConfirmedHandler(
     IEventRepository events,
     ICacheService cache) : IBookingConfirmedHandler
 {
+    /// <summary>Обрабатывает интеграционное событие с соблюдением порядка БД → кеш.</summary>
     public async Task<BookingConfirmationResult> HandleAsync(
         BookingConfirmed message,
         CancellationToken cancellationToken = default)

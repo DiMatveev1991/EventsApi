@@ -4,9 +4,11 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace EventsApi.Infrastructure.Persistence.Configurations;
 
+/// <summary>Настраивает inbox-таблицу обработанных подтверждений бронирований.</summary>
 public sealed class ProcessedBookingMessageConfiguration
     : IEntityTypeConfiguration<ProcessedBookingMessage>
 {
+    /// <summary>Настраивает первичный ключ и поля inbox-маркера.</summary>
     public void Configure(EntityTypeBuilder<ProcessedBookingMessage> builder)
     {
         builder.ToTable("processed_booking_messages");
