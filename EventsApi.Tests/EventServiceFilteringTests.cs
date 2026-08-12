@@ -60,19 +60,21 @@ public sealed class EventServiceFilteringTests : IAsyncLifetime
     [Fact]
     public async Task From_filter_returns_events_starting_at_or_after_boundary()
     {
-        var result = await Service.GetAllAsync(TestData.Query(from: At(7, 15, 18)));
+        var boundary = At(7, 15, 18);
+        var result = await Service.GetAllAsync(TestData.Query(from: boundary));
 
         result.TotalCount.Should().Be(3);
-        result.Items.Should().OnlyContain(item => item.StartAt >= At(7, 15, 18));
+        result.Items.Should().OnlyContain(item => item.StartAt >= boundary);
     }
 
     [Fact]
     public async Task To_filter_returns_events_ending_at_or_before_boundary()
     {
-        var result = await Service.GetAllAsync(TestData.Query(to: At(8, 31, 23, 59)));
+        var boundary = At(8, 31, 23, 59);
+        var result = await Service.GetAllAsync(TestData.Query(to: boundary));
 
         result.TotalCount.Should().Be(3);
-        result.Items.Should().OnlyContain(item => item.EndAt <= At(8, 31, 23, 59));
+        result.Items.Should().OnlyContain(item => item.EndAt <= boundary);
     }
 
     [Fact]
