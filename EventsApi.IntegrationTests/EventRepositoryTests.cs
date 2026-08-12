@@ -40,7 +40,7 @@ public sealed class EventRepositoryTests(PostgreSqlFixture fixture)
     [Fact]
     public async Task Top_popular_orders_by_sold_percentage_and_limits_result()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var repository = new EventRepository(database.Context);
         var events = Enumerable.Range(0, 12)
             .Select(_ => CreateEvent(100))
@@ -70,7 +70,6 @@ public sealed class EventRepositoryTests(PostgreSqlFixture fixture)
 
         await repository.UpdateAsync(ev);
         database.Context.ChangeTracker.Clear();
-
         (await repository.GetByIdAsync(ev.Id))!.Title.Should().Be("Updated");
     }
 
