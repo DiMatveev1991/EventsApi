@@ -33,5 +33,15 @@ public sealed class KafkaBookingEventPublisher : IBookingEventPublisher, IDispos
             cancellationToken);
     }
 
-    public void Dispose() => _producer.Dispose();
+    public void Dispose()
+    {
+        try
+        {
+            _producer.Flush(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            _producer.Dispose();
+        }
+    }
 }

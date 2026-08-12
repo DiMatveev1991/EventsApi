@@ -113,7 +113,7 @@ services:
   events-api:
     build:
       context: .
-      dockerfile: src/EventsApi.Presentation/Dockerfile
+      dockerfile: src/Services/Events/Events.Presentation/Dockerfile
     depends_on:
       events-db:
         condition: service_healthy

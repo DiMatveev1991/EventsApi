@@ -23,6 +23,9 @@ namespace EventsApi.Infrastructure.DependencyInjection
             // Слой данных: PostgreSQL через EF Core. DbContext регистрируется как scoped.
             services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(configuration.GetConnectionString("EventsDatabase")));
+            services.AddHealthChecks()
+                .AddDbContextCheck<AppDbContext>("database")
+                .AddCheck<KafkaHealthCheck>("kafka");
 
             // Реализации портов — scoped: делят scoped-контекст AppDbContext в пределах запроса.
             services.AddScoped<IEventRepository, EventRepository>();

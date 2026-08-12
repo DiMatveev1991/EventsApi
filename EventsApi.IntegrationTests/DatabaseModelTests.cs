@@ -9,12 +9,13 @@ using Xunit;
 
 namespace EventsApi.IntegrationTests;
 
-public sealed class DatabaseModelTests
+[Collection(PostgreSqlCollection.Name)]
+public sealed class DatabaseModelTests(PostgreSqlFixture fixture)
 {
     [Fact]
     public async Task Users_has_own_table_and_unique_login_index()
     {
-        await using var database = await SqliteTestDatabase.CreateUsersAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateUsersAsync(fixture);
         var entity = database.Context.Model.FindEntityType(typeof(User))!;
 
         entity.GetTableName().Should().Be("users");
@@ -27,7 +28,7 @@ public sealed class DatabaseModelTests
     [Fact]
     public async Task Bookings_stores_only_cross_service_identifiers_without_foreign_keys()
     {
-        await using var database = await SqliteTestDatabase.CreateBookingsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
         var entity = database.Context.Model.FindEntityType(typeof(Booking))!;
 
         entity.GetTableName().Should().Be("bookings");
@@ -39,7 +40,7 @@ public sealed class DatabaseModelTests
     [Fact]
     public async Task Events_has_inbox_table_for_idempotency()
     {
-        await using var database = await SqliteTestDatabase.CreateEventsAsync();
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
         var eventEntity = database.Context.Model.FindEntityType(typeof(Event))!;
         var inboxEntity = database.Context.Model.FindEntityType(typeof(ProcessedBookingMessage))!;
 
@@ -54,9 +55,9 @@ public sealed class DatabaseModelTests
     [Fact]
     public async Task Every_service_exposes_its_own_initial_migration()
     {
-        await using var users = await SqliteTestDatabase.CreateUsersAsync();
-        await using var bookings = await SqliteTestDatabase.CreateBookingsAsync();
-        await using var events = await SqliteTestDatabase.CreateEventsAsync();
+        await using var users = await PostgreSqlTestDatabase.CreateUsersAsync(fixture);
+        await using var bookings = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        await using var events = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
 
         users.Context.Database.GetMigrations().Should().ContainSingle()
             .Which.Should().Be("20260811000100_InitialUsers");

@@ -16,6 +16,9 @@ public static class InfrastructureExtensions
     {
         services.AddDbContext<BookingsDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("BookingsDatabase")));
+        services.AddHealthChecks()
+            .AddDbContextCheck<BookingsDbContext>("database")
+            .AddCheck<KafkaHealthCheck>("kafka");
         services.AddScoped<IBookingRepository, BookingRepository>();
 
         var bootstrapServers = configuration["Kafka:BootstrapServers"]

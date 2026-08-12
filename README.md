@@ -89,6 +89,12 @@ Redis не является обязательной зависимостью з
 обычного запроса PostgreSQL. Docker smoke-test останавливает Redis, перезапускает
 Events API и подтверждает, что `GET /events/{id}` продолжает работать.
 
+Задержка подтверждения брони и интервал опроса задаются в секции
+`BookingProcessing`. Искусственная задержка по умолчанию равна нулю, поэтому
+рост нагрузки не создаёт очередь обязательных двухсекундных ожиданий. Producer
+явно выполняет `Flush` при штатной остановке, а неподтверждённые публикации всё
+равно подхватываются следующим циклом фонового обработчика.
+
 ## Запуск одной командой
 
 Нужен Docker Desktop с поддержкой Docker Compose.
@@ -97,6 +103,10 @@ Events API и подтверждает, что `GET /events/{id}` продолж
 
 Команда поднимает Zookeeper, Kafka, Redis, три PostgreSQL, три API и автоматически
 применяет отдельные EF Core migrations каждого сервиса.
+
+Эндпоинт `/health` каждого API проверяет собственную PostgreSQL-базу, а Events
+и Bookings дополнительно проверяют Kafka. Поэтому Docker и внешняя система
+мониторинга различают запущенный процесс и действительно готовый сервис.
 
 Для локального запуска предусмотрен development JWT secret. Его можно заменить:
 
@@ -151,8 +161,10 @@ JWT выдаёт только Users. Все сервисы используют 
 - Jwt__Issuer=EventsSystem;
 - Jwt__Audience=EventsSystem.Clients.
 
-Токен содержит NameIdentifier, имя и роль. Events и Bookings только проверяют
-подпись и claims; таблиц пользователей в их базах нет.
+Токен содержит NameIdentifier, имя и роль. Все три API используют одинаковую
+JWT-валидацию; Events и Bookings при этом не имеют таблиц пользователей в своих
+базах. Кнопка Authorize в Swagger Users теперь соответствует реальному
+authentication pipeline, а не только добавляет декоративный заголовок.
 
 ## Отдельные базы и миграции
 
@@ -174,6 +186,10 @@ JWT выдаёт только Users. Все сервисы используют 
 
 Для Events и Bookings используются соответствующие пары Infrastructure/Presentation.
 
+Для Events пути имеют вид
+`src/Services/Events/Events.Infrastructure/Events.Infrastructure.csproj` и
+`src/Services/Events/Events.Presentation/Events.Presentation.csproj`.
+
 ## Сборка и тесты
 
     dotnet restore EventsApi.sln
@@ -183,11 +199,13 @@ JWT выдаёт только Users. Все сервисы используют 
 Решение содержит два тестовых проекта:
 
 - `EventsApi.Tests` — unit-тесты сервисов Users, Events и Bookings, доменных
-  инвариантов, JWT/PBKDF2, авторизации, фильтрации, пагинации, Kafka-контракта,
+  инвариантов, JWT/PBKDF2, фильтрации, пагинации, Kafka-контракта,
   попаданий/промахов кеша, разных TTL и инвалидации после CRUD и Kafka;
-- `EventsApi.IntegrationTests` — проверки трёх независимых EF Core-контекстов,
-  репозиториев, индексов, миграций, inbox-идемпотентности и обработки
-  `BookingConfirmed`, включая сортировку топ-10.
+  unit-проект не ссылается на Presentation;
+- `EventsApi.IntegrationTests` — проверки HTTP-контрактов и трёх независимых
+  EF Core-контекстов на настоящем PostgreSQL 16 через Testcontainers, включая
+  индексы, миграции, сортировку топ-10 и конкурентную inbox-идемпотентность
+  `BookingConfirmed`.
 
 GitHub Actions выполняет restore, format verification, Release build, оба
 тестовых проекта и полный Docker smoke-сценарий на каждый push и pull request.
@@ -196,11 +214,12 @@ GitHub Actions выполняет restore, format verification, Release build, �
 
     src/
     ├── BuildingBlocks/Contracts
-    ├── EventsApi.Domain
-    ├── EventsApi.Application
-    ├── EventsApi.Infrastructure
-    ├── EventsApi.Presentation
     └── Services/
+        ├── Events/
+        │   ├── Events.Domain
+        │   ├── Events.Application
+        │   ├── Events.Infrastructure
+        │   └── Events.Presentation
         ├── Users/
         │   ├── Users.Domain
         │   ├── Users.Application

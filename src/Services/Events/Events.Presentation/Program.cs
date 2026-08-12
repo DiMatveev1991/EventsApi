@@ -80,7 +80,7 @@ app.UseSwaggerUI();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
+app.MapHealthChecks("/health").AllowAnonymous();
 app.Run();
 
 public partial class Program { }
