@@ -74,6 +74,23 @@ namespace EventsApi.Infrastructure.Repositories
                 .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
         }
 
+        public async Task<IReadOnlyList<Event>> GetTopPopularAsync(
+            int count,
+            CancellationToken cancellationToken = default)
+        {
+            if (count <= 0)
+                return Array.Empty<Event>();
+
+            return await _context.Events
+                .AsNoTracking()
+                .Where(e => e.TotalSeats > 0)
+                .OrderByDescending(e =>
+                    (double)(e.TotalSeats - e.AvailableSeats) / e.TotalSeats)
+                .ThenBy(e => e.Id)
+                .Take(count)
+                .ToListAsync(cancellationToken);
+        }
+
         public async Task AddAsync(Event ev, CancellationToken cancellationToken = default)
         {
             _context.Events.Add(ev);

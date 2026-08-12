@@ -24,6 +24,17 @@ namespace EventsApi.Presentation.Controllers
             return Ok(result);
         }
 
+        /// <summary>Получить топ-10 событий по проценту проданных мест</summary>
+        [HttpGet("top")]
+        [AllowAnonymous]
+        [ProducesResponseType(typeof(IReadOnlyList<PopularEventDto>), StatusCodes.Status200OK)]
+        public async Task<ActionResult<IReadOnlyList<PopularEventDto>>> GetTop(
+            CancellationToken cancellationToken)
+        {
+            var result = await eventService.GetTopPopularAsync(cancellationToken);
+            return Ok(result);
+        }
+
         /// <summary>Получить мероприятие по ID</summary>
         [HttpGet("{id:guid}")]
         [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]

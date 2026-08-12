@@ -1,10 +1,13 @@
 using EventsApi.Application.Abstractions;
+using EventsApi.Application.Caching;
+using EventsApi.Infrastructure.Caching;
 using EventsApi.Infrastructure.Messaging;
 using EventsApi.Infrastructure.Persistence;
 using EventsApi.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
 
 namespace EventsApi.Infrastructure.DependencyInjection
 {
@@ -23,6 +26,22 @@ namespace EventsApi.Infrastructure.DependencyInjection
 
             // Реализации портов — scoped: делят scoped-контекст AppDbContext в пределах запроса.
             services.AddScoped<IEventRepository, EventRepository>();
+
+            services.Configure<CacheOptions>(
+                configuration.GetSection(CacheOptions.SectionName));
+            services.AddSingleton<IConnectionMultiplexer>(_ =>
+            {
+                var connectionString = configuration["Redis:ConnectionString"]
+                    ?? "localhost:6379";
+                var options = ConfigurationOptions.Parse(connectionString);
+                options.AbortOnConnectFail = false;
+                options.ConnectRetry = 1;
+                options.ConnectTimeout = 1_000;
+                options.SyncTimeout = 1_000;
+                return ConnectionMultiplexer.Connect(options);
+            });
+            services.AddSingleton<ICacheService, RedisCacheService>();
+
             services.AddHostedService<KafkaTopicInitializer>();
             services.AddHostedService<BookingConfirmedConsumer>();
 

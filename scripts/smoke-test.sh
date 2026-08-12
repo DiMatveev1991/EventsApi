@@ -74,6 +74,27 @@ for _ in $(seq 1 30); do
 done
 test "$available_seats" = "2"
 
+event_ttl=$(docker compose exec -T redis redis-cli TTL "event:$event_id" | tr -d '\r')
+test "$event_ttl" -gt 0
+test "$event_ttl" -le 300
+
+top_json=$(curl --fail --silent --show-error "http://localhost:5002/events/top")
+top_count=$(jq "length" <<<"$top_json")
+test "$top_count" -ge 1
+test "$top_count" -le 10
+top_ttl=$(docker compose exec -T redis redis-cli TTL "events:top10" | tr -d '\r')
+test "$top_ttl" -gt 0
+test "$top_ttl" -le 60
+
+# Redis is optional at runtime: Events must restart and serve database-backed
+# requests while the cache is unavailable.
+docker compose stop redis
+docker compose restart events-api
+wait_for_api "http://localhost:5002/health" "Events API without Redis"
+available_without_redis=$(curl --max-time 10 --fail --silent --show-error \
+  "http://localhost:5002/events/$event_id" | jq --raw-output ".availableSeats")
+test "$available_without_redis" = "2"
+
 unauthorized_booking_status=$(curl --silent --show-error --output /dev/null \
   --write-out "%{http_code}" --request POST "http://localhost:5003/bookings" \
   --header "Content-Type: application/json" \

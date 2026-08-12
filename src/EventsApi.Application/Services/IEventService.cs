@@ -11,6 +11,8 @@ namespace EventsApi.Application.Services
             EventQueryParameters query, CancellationToken cancellationToken = default);
 
         Task<EventDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<PopularEventDto>> GetTopPopularAsync(
+            CancellationToken cancellationToken = default);
         Task<EventDto> CreateAsync(CreateEventDto dto, CancellationToken cancellationToken = default);
         Task<EventDto> UpdateAsync(Guid id, UpdateEventDto dto, CancellationToken cancellationToken = default);
         Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);

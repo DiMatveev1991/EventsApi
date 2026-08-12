@@ -26,6 +26,7 @@ public sealed class AuthorizationContractTests
     [Theory]
     [InlineData(nameof(EventsController.GetAll))]
     [InlineData(nameof(EventsController.GetById))]
+    [InlineData(nameof(EventsController.GetTop))]
     public void Event_reads_do_not_require_admin_role(string methodName)
     {
         var method = typeof(EventsController).GetMethod(methodName);
