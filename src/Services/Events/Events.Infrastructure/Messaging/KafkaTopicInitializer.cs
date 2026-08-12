@@ -7,11 +7,12 @@ using Microsoft.Extensions.Logging;
 
 namespace EventsApi.Infrastructure.Messaging;
 
-/// <summary>Creates required topics before the consumer hosted service starts.</summary>
+/// <summary>Создаёт обязательные Kafka-топики до запуска основного потока сообщений.</summary>
 public sealed class KafkaTopicInitializer(
     IConfiguration configuration,
     ILogger<KafkaTopicInitializer> logger) : IHostedService
 {
+    /// <summary>Создаёт топик подтверждений с повторами на случай старта Kafka.</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var bootstrapServers = configuration["Kafka:BootstrapServers"]
@@ -22,6 +23,8 @@ public sealed class KafkaTopicInitializer(
             BootstrapServers = bootstrapServers
         }).Build();
 
+        // Kafka и API стартуют параллельно в compose, поэтому инициализация
+        // допускает временную недоступность брокера и выполняет ограниченные повторы.
         for (var attempt = 1; attempt <= 10; attempt++)
         {
             try
@@ -63,5 +66,6 @@ public sealed class KafkaTopicInitializer(
             KafkaTopics.BookingConfirmed);
     }
 
+    /// <summary>Завершает инициализатор; постоянных ресурсов после старта у него нет.</summary>
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

@@ -5,10 +5,13 @@ using Bookings.Domain.Exceptions;
 
 namespace Bookings.Application.Services;
 
+/// <summary>Реализует создание, просмотр и отмену бронирований.</summary>
 public sealed class BookingService(IBookingRepository bookings) : IBookingService
 {
+    /// <summary>Максимальное количество активных бронирований одного пользователя.</summary>
     public const int MaxActiveBookingsPerUser = 10;
 
+    /// <summary>Создаёт бронирование с проверкой пользовательского лимита.</summary>
     public async Task<BookingResponse> CreateAsync(
         CreateBookingRequest request,
         Guid userId,
@@ -23,6 +26,7 @@ public sealed class BookingService(IBookingRepository bookings) : IBookingServic
         return Map(booking);
     }
 
+    /// <summary>Возвращает бронирование владельцу или администратору.</summary>
     public async Task<BookingResponse> GetByIdAsync(
         Guid bookingId,
         Guid currentUserId,
@@ -34,6 +38,7 @@ public sealed class BookingService(IBookingRepository bookings) : IBookingServic
         return Map(booking);
     }
 
+    /// <summary>Отменяет бронирование владельца или администратора.</summary>
     public async Task CancelAsync(
         Guid bookingId,
         Guid currentUserId,
@@ -46,16 +51,19 @@ public sealed class BookingService(IBookingRepository bookings) : IBookingServic
         await bookings.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>Находит бронирование либо формирует ожидаемую ошибку 404.</summary>
     private async Task<Booking> FindAsync(Guid id, CancellationToken cancellationToken) =>
         await bookings.GetByIdAsync(id, cancellationToken)
         ?? throw new NotFoundException($"Booking {id} was not found.");
 
+    /// <summary>Проверяет, что запрос выполняет владелец бронирования или администратор.</summary>
     private static void EnsureOwnerOrAdmin(Booking booking, Guid currentUserId, bool isAdmin)
     {
         if (!isAdmin && booking.UserId != currentUserId)
             throw new ForbiddenException("You can access only your own bookings.");
     }
 
+    /// <summary>Преобразует доменную сущность бронирования в DTO ответа.</summary>
     internal static BookingResponse Map(Booking booking) => new(
         booking.Id,
         booking.EventId,

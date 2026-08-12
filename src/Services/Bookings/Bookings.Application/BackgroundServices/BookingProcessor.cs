@@ -19,6 +19,7 @@ public sealed class BookingProcessor(
 {
     private readonly BookingProcessingOptions _options = options.Value;
 
+    /// <summary>Запускает цикл подтверждения и повторной публикации бронирований.</summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -41,8 +42,11 @@ public sealed class BookingProcessor(
         }
     }
 
+    /// <summary>Находит ожидающие обработки и неподтверждённые публикацией записи.</summary>
     private async Task<IReadOnlyList<Guid>> FindWorkAsync(CancellationToken cancellationToken)
     {
+        // BackgroundService зарегистрирован как Singleton, а репозиторий Scoped,
+        // поэтому каждый цикл получает собственный scope и DbContext.
         using var scope = scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
         var pending = await repository.GetPendingIdsAsync(cancellationToken);
@@ -50,12 +54,16 @@ public sealed class BookingProcessor(
         return pending.Concat(unpublished).Distinct().ToArray();
     }
 
+    /// <summary>Подтверждает одно бронирование и надёжно публикует его событие.</summary>
     private async Task ProcessAsync(Guid bookingId, CancellationToken cancellationToken)
     {
         try
         {
             if (_options.ConfirmationDelay > TimeSpan.Zero)
                 await Task.Delay(_options.ConfirmationDelay, cancellationToken);
+
+            // Отдельный scope исключает совместное использование DbContext между
+            // параллельно обрабатываемыми бронированиями.
             using var scope = scopeFactory.CreateScope();
             var repository = scope.ServiceProvider.GetRequiredService<IBookingRepository>();
             var publisher = scope.ServiceProvider.GetRequiredService<IBookingEventPublisher>();
@@ -67,6 +75,8 @@ public sealed class BookingProcessor(
             if (booking.Status == BookingStatus.Pending)
             {
                 booking.Confirm(DateTimeOffset.UtcNow);
+                // Статус обязательно фиксируется до Kafka. Если publish упадёт,
+                // запись попадёт в GetUnpublishedConfirmedIdsAsync следующего цикла.
                 await repository.SaveChangesAsync(cancellationToken);
                 logger.LogInformation(
                     "Booking {BookingId} persisted as Confirmed before publishing",
@@ -84,6 +94,7 @@ public sealed class BookingProcessor(
                 booking.ProcessedAt!.Value);
 
             await publisher.PublishAsync(message, cancellationToken);
+            // Локальная отметка выставляется только после подтверждения Kafka.
             booking.MarkConfirmationPublished(DateTimeOffset.UtcNow);
             await repository.SaveChangesAsync(cancellationToken);
             logger.LogInformation(

@@ -1,19 +1,33 @@
 using EventsApi.Application.Abstractions;
+using EventsApi.Application.Caching;
 using EventsApi.Application.Dtos;
 using EventsApi.Domain.Entities;
 using EventsApi.Domain.Exceptions;
+using Microsoft.Extensions.Options;
 
 namespace EventsApi.Application.Services
 {
+    /// <summary>
+    /// Реализует прикладные сценарии Events и координирует PostgreSQL с кешем.
+    /// </summary>
     public class EventService : IEventService
     {
         private readonly IEventRepository _repository;
+        private readonly ICacheService _cache;
+        private readonly CacheOptions _cacheOptions;
 
-        public EventService(IEventRepository repository)
+        /// <summary>Создаёт сервис событий с репозиторием и абстракцией кеша.</summary>
+        public EventService(
+            IEventRepository repository,
+            ICacheService cache,
+            IOptions<CacheOptions> cacheOptions)
         {
             _repository = repository;
+            _cache = cache;
+            _cacheOptions = cacheOptions.Value;
         }
 
+        /// <summary>Возвращает страницу событий с фильтрацией и нормализованной пагинацией.</summary>
         public async Task<PaginatedResult<EventDto>> GetAllAsync(
             EventQueryParameters query, CancellationToken cancellationToken = default)
         {
@@ -36,13 +50,46 @@ namespace EventsApi.Application.Services
             return new PaginatedResult<EventDto>(items, totalCount, page, pageSize);
         }
 
+        /// <summary>Возвращает событие по идентификатору по паттерну Cache-Aside.</summary>
         public async Task<EventDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
+            var key = CacheKeys.Event(id);
+            var cached = await _cache.GetAsync<EventDto>(key, cancellationToken);
+            if (cached is not null)
+                return cached;
+
+            // Redis не является источником истины: промах или сбой переводит чтение в PostgreSQL.
             var ev = await _repository.GetByIdAsync(id, cancellationToken)
                 ?? throw NotFoundException.ForEvent(id);
-            return MapToDto(ev);
+
+            var result = MapToDto(ev);
+            await _cache.SetAsync(key, result, _cacheOptions.EventTtl, cancellationToken);
+            return result;
         }
 
+        /// <summary>Возвращает кешируемый по TTL рейтинг из десяти популярных событий.</summary>
+        public async Task<IReadOnlyList<PopularEventDto>> GetTopPopularAsync(
+            CancellationToken cancellationToken = default)
+        {
+            var cached = await _cache.GetAsync<List<PopularEventDto>>(
+                CacheKeys.TopEvents,
+                cancellationToken);
+            if (cached is not null)
+                return cached;
+
+            // Топ — допустимо слегка устаревающий агрегат, поэтому он обновляется
+            // только по TTL и не инвалидируется при каждом бронировании.
+            var events = await _repository.GetTopPopularAsync(10, cancellationToken);
+            var result = events.Select(MapToPopularDto).ToList();
+            await _cache.SetAsync(
+                CacheKeys.TopEvents,
+                result,
+                _cacheOptions.TopEventsTtl,
+                cancellationToken);
+            return result;
+        }
+
+        /// <summary>Создаёт событие и после фиксации в БД инвалидирует его ключ кеша.</summary>
         public async Task<EventDto> CreateAsync(CreateEventDto dto, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(dto);
@@ -67,9 +114,13 @@ namespace EventsApi.Application.Services
 
             await _repository.AddAsync(ev, cancellationToken);
 
+            // Сначала фиксируем запись в БД, затем удаляем потенциально устаревший ключ.
+            await _cache.RemoveAsync(CacheKeys.Event(ev.Id), cancellationToken);
+
             return MapToDto(ev);
         }
 
+        /// <summary>Обновляет событие и после фиксации в БД инвалидирует его кеш.</summary>
         public async Task<EventDto> UpdateAsync(Guid id, UpdateEventDto dto, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(dto);
@@ -85,15 +136,20 @@ namespace EventsApi.Application.Services
 
             await _repository.UpdateAsync(ev, cancellationToken);
 
+            // Cache-Aside с инвалидацией при записи: следующий GET прогреет кеш.
+            await _cache.RemoveAsync(CacheKeys.Event(id), cancellationToken);
+
             return MapToDto(ev);
         }
 
+        /// <summary>Удаляет событие и после фиксации в БД удаляет его ключ кеша.</summary>
         public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
         {
             var ev = await _repository.GetByIdAsync(id, cancellationToken)
                 ?? throw NotFoundException.ForEvent(id);
 
             await _repository.DeleteAsync(ev, cancellationToken);
+            await _cache.RemoveAsync(CacheKeys.Event(id), cancellationToken);
         }
 
         /// <summary>
@@ -117,6 +173,7 @@ namespace EventsApi.Application.Services
             }
         }
 
+        /// <summary>Добавляет сообщение в коллекцию ошибок заданного поля.</summary>
         private static void AddError(Dictionary<string, List<string>> bag, string key, string msg)
         {
             if (!bag.TryGetValue(key, out var list))
@@ -127,6 +184,7 @@ namespace EventsApi.Application.Services
             list.Add(msg);
         }
 
+        /// <summary>Преобразует доменную сущность в DTO API.</summary>
         private static EventDto MapToDto(Event ev) => new()
         {
             Id = ev.Id,
@@ -136,6 +194,24 @@ namespace EventsApi.Application.Services
             EndAt = ev.EndAt,
             TotalSeats = ev.TotalSeats,
             AvailableSeats = ev.AvailableSeats
+        };
+
+        /// <summary>Преобразует событие в элемент рейтинга и рассчитывает процент продаж.</summary>
+        private static PopularEventDto MapToPopularDto(Event ev) => new()
+        {
+            Id = ev.Id,
+            Title = ev.Title,
+            Description = ev.Description,
+            StartAt = ev.StartAt,
+            EndAt = ev.EndAt,
+            TotalSeats = ev.TotalSeats,
+            AvailableSeats = ev.AvailableSeats,
+            SoldPercentage = ev.TotalSeats <= 0
+                ? 0
+                : Math.Round(
+                    (double)(ev.TotalSeats - ev.AvailableSeats) / ev.TotalSeats * 100,
+                    2,
+                    MidpointRounding.AwayFromZero)
         };
     }
 }

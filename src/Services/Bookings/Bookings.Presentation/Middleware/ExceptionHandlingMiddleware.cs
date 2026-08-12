@@ -3,10 +3,12 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Bookings.Presentation.Middleware;
 
+/// <summary>Преобразует исключения Bookings в безопасные ответы Problem Details.</summary>
 public sealed class ExceptionHandlingMiddleware(
     RequestDelegate next,
     ILogger<ExceptionHandlingMiddleware> logger)
 {
+    /// <summary>Передаёт запрос дальше и обрабатывает необработанные исключения.</summary>
     public async Task InvokeAsync(HttpContext context)
     {
         try

@@ -4,8 +4,10 @@ using Users.Domain.Entities;
 
 namespace Users.Infrastructure.Persistence.Configurations;
 
+/// <summary>Настраивает отображение пользователя в PostgreSQL.</summary>
 public sealed class UserConfiguration : IEntityTypeConfiguration<User>
 {
+    /// <summary>Настраивает таблицу, ограничения и уникальный индекс логина.</summary>
     public void Configure(EntityTypeBuilder<User> builder)
     {
         builder.ToTable("users");

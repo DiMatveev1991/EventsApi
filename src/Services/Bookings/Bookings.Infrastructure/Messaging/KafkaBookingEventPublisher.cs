@@ -5,10 +5,12 @@ using Contracts;
 
 namespace Bookings.Infrastructure.Messaging;
 
+/// <summary>Публикует подтверждения бронирований в Kafka.</summary>
 public sealed class KafkaBookingEventPublisher : IBookingEventPublisher, IDisposable
 {
     private readonly IProducer<string, string> _producer;
 
+    /// <summary>Создаёт идемпотентный producer с обязательным подтверждением брокера.</summary>
     public KafkaBookingEventPublisher(string bootstrapServers)
     {
         _producer = new ProducerBuilder<string, string>(new ProducerConfig
@@ -19,6 +21,7 @@ public sealed class KafkaBookingEventPublisher : IBookingEventPublisher, IDispos
         }).Build();
     }
 
+    /// <summary>Сериализует и публикует подтверждение бронирования.</summary>
     public async Task PublishAsync(
         BookingConfirmed message,
         CancellationToken cancellationToken = default)
@@ -27,16 +30,19 @@ public sealed class KafkaBookingEventPublisher : IBookingEventPublisher, IDispos
             KafkaTopics.BookingConfirmed,
             new Message<string, string>
             {
+                // EventId обеспечивает один partition и порядок всех броней события.
                 Key = message.EventId.ToString("N"),
                 Value = JsonSerializer.Serialize(message)
             },
             cancellationToken);
     }
 
+    /// <summary>Дожидается отправки буфера и освобождает Kafka producer.</summary>
     public void Dispose()
     {
         try
         {
+            // Явный Flush уменьшает риск потери последних сообщений при штатной остановке.
             _producer.Flush(TimeSpan.FromSeconds(10));
         }
         finally

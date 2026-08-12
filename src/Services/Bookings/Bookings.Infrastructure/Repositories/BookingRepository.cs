@@ -6,13 +6,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Bookings.Infrastructure.Repositories;
 
+/// <summary>Реализует хранилище бронирований поверх EF Core.</summary>
 public sealed class BookingRepository(BookingsDbContext context) : IBookingRepository
 {
+    /// <summary>Возвращает бронирование по идентификатору.</summary>
     public Task<Booking?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default) =>
         context.Bookings.SingleOrDefaultAsync(booking => booking.Id == id, cancellationToken);
 
+    /// <summary>Возвращает идентификаторы ожидающих подтверждения бронирований.</summary>
     public async Task<IReadOnlyList<Guid>> GetPendingIdsAsync(
         CancellationToken cancellationToken = default) =>
         await context.Bookings
@@ -21,6 +24,7 @@ public sealed class BookingRepository(BookingsDbContext context) : IBookingRepos
             .Select(booking => booking.Id)
             .ToListAsync(cancellationToken);
 
+    /// <summary>Возвращает подтверждённые бронирования без отметки публикации.</summary>
     public async Task<IReadOnlyList<Guid>> GetUnpublishedConfirmedIdsAsync(
         CancellationToken cancellationToken = default) =>
         await context.Bookings
@@ -31,6 +35,7 @@ public sealed class BookingRepository(BookingsDbContext context) : IBookingRepos
             .Select(booking => booking.Id)
             .ToListAsync(cancellationToken);
 
+    /// <summary>Считает ожидающие и подтверждённые бронирования пользователя.</summary>
     public Task<int> CountActiveByUserIdAsync(
         Guid userId,
         CancellationToken cancellationToken = default) =>
@@ -41,12 +46,14 @@ public sealed class BookingRepository(BookingsDbContext context) : IBookingRepos
                  booking.Status == BookingStatus.Confirmed),
             cancellationToken);
 
+    /// <summary>Добавляет бронирование и фиксирует изменения.</summary>
     public async Task AddAsync(Booking booking, CancellationToken cancellationToken = default)
     {
         context.Bookings.Add(booking);
         await context.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>Фиксирует изменения отслеживаемых бронирований.</summary>
     public Task SaveChangesAsync(CancellationToken cancellationToken = default) =>
         context.SaveChangesAsync(cancellationToken);
 }

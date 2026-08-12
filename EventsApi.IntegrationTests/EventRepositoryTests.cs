@@ -38,6 +38,28 @@ public sealed class EventRepositoryTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task Top_popular_orders_by_sold_percentage_and_limits_result()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
+        var repository = new EventRepository(database.Context);
+        var events = Enumerable.Range(0, 12)
+            .Select(_ => CreateEvent(100))
+            .ToList();
+        foreach (var (ev, index) in events.Select((item, index) => (item, index)))
+            ev.AvailableSeats = ev.TotalSeats - index * 5;
+        database.Context.Events.AddRange(events);
+        await database.Context.SaveChangesAsync();
+
+        var result = await repository.GetTopPopularAsync(10);
+
+        result.Should().HaveCount(10);
+        result.Select(ev =>
+                (double)(ev.TotalSeats - ev.AvailableSeats) / ev.TotalSeats)
+            .Should().BeInDescendingOrder();
+        result.Select(ev => ev.Id).Should().NotContain(events[0].Id);
+    }
+
+    [Fact]
     public async Task Update_persists_changed_fields()
     {
         await using var database = await PostgreSqlTestDatabase.CreateEventsAsync(fixture);
@@ -48,7 +70,6 @@ public sealed class EventRepositoryTests(PostgreSqlFixture fixture)
 
         await repository.UpdateAsync(ev);
         database.Context.ChangeTracker.Clear();
-
         (await repository.GetByIdAsync(ev.Id))!.Title.Should().Be("Updated");
     }
 

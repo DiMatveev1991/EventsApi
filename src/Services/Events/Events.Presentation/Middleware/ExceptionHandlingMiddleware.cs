@@ -20,6 +20,7 @@ namespace EventsApi.Presentation.Middleware
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
+        /// <summary>Создаёт middleware с доступом к следующему обработчику и окружению.</summary>
         public ExceptionHandlingMiddleware(
             RequestDelegate next,
             ILogger<ExceptionHandlingMiddleware> logger,
@@ -30,6 +31,7 @@ namespace EventsApi.Presentation.Middleware
             _env = env;
         }
 
+        /// <summary>Передаёт запрос дальше и перехватывает необработанные исключения.</summary>
         public async Task InvokeAsync(HttpContext context)
         {
             try
@@ -42,6 +44,7 @@ namespace EventsApi.Presentation.Middleware
             }
         }
 
+        /// <summary>Преобразует исключение в единообразный ответ Problem Details.</summary>
         private async Task HandleExceptionAsync(HttpContext context, Exception exception)
         {
             var (statusCode, title, detail, errors) = MapException(exception);
@@ -74,6 +77,7 @@ namespace EventsApi.Presentation.Middleware
             await context.Response.WriteAsync(payload);
         }
 
+        /// <summary>Сопоставляет исключение со статусом и безопасным текстом ответа.</summary>
         private static (int statusCode, string title, string detail, IReadOnlyDictionary<string, string[]>? errors)
             MapException(Exception ex)
         {
@@ -106,8 +110,10 @@ namespace EventsApi.Presentation.Middleware
         }
     }
 
+    /// <summary>Содержит расширение для подключения глобального обработчика ошибок.</summary>
     public static class ExceptionHandlingMiddlewareExtensions
     {
+        /// <summary>Добавляет глобальный ExceptionHandlingMiddleware в HTTP-конвейер.</summary>
         public static IApplicationBuilder UseGlobalExceptionHandler(this IApplicationBuilder app) =>
             app.UseMiddleware<ExceptionHandlingMiddleware>();
     }

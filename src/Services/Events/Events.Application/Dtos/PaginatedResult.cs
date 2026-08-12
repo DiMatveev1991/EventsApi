@@ -18,8 +18,10 @@ namespace EventsApi.Application.Dtos
         /// <summary>Элементы текущей страницы.</summary>
         public IReadOnlyList<T> Items { get; set; } = Array.Empty<T>();
 
+        /// <summary>Создаёт пустой результат для сериализации и привязки модели.</summary>
         public PaginatedResult() { }
 
+        /// <summary>Создаёт заполненный результат страничной выборки.</summary>
         public PaginatedResult(IReadOnlyList<T> items, int totalCount, int page, int pageSize)
         {
             Items = items;

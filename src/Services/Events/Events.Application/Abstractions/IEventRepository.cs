@@ -32,6 +32,13 @@ namespace EventsApi.Application.Abstractions
         /// </summary>
         Task<Event?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// Возвращает не более десяти событий с наибольшей долей проданных мест.
+        /// </summary>
+        Task<IReadOnlyList<Event>> GetTopPopularAsync(
+            int count,
+            CancellationToken cancellationToken = default);
+
         /// <summary>Добавляет новое событие и сохраняет изменения.</summary>
         Task AddAsync(Event ev, CancellationToken cancellationToken = default);
 

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace EventsApi.Presentation.Controllers
 {
+    /// <summary>Предоставляет HTTP API управления событиями и чтения рейтинга.</summary>
     [ApiController]
     [Route("events")]
     public class EventsController(IEventService eventService) : ControllerBase
@@ -21,6 +22,17 @@ namespace EventsApi.Presentation.Controllers
             [FromQuery] EventQueryParameters query, CancellationToken cancellationToken)
         {
             var result = await eventService.GetAllAsync(query, cancellationToken);
+            return Ok(result);
+        }
+
+        /// <summary>Получить топ-10 событий по проценту проданных мест</summary>
+        [HttpGet("top")]
+        [AllowAnonymous]
+        [ProducesResponseType(typeof(IReadOnlyList<PopularEventDto>), StatusCodes.Status200OK)]
+        public async Task<ActionResult<IReadOnlyList<PopularEventDto>>> GetTop(
+            CancellationToken cancellationToken)
+        {
+            var result = await eventService.GetTopPopularAsync(cancellationToken);
             return Ok(result);
         }
 

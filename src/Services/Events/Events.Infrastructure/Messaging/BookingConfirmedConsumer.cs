@@ -9,6 +9,9 @@ using Microsoft.Extensions.Logging;
 
 namespace EventsApi.Infrastructure.Messaging;
 
+/// <summary>
+/// Читает подтверждения бронирований из Kafka и передаёт их scoped-обработчику.
+/// </summary>
 public sealed class BookingConfirmedConsumer : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -20,6 +23,7 @@ public sealed class BookingConfirmedConsumer : BackgroundService
     private readonly ILogger<BookingConfirmedConsumer> _logger;
     private readonly IConsumer<string, string> _consumer;
 
+    /// <summary>Создаёт Kafka consumer с ручным подтверждением смещения.</summary>
     public BookingConfirmedConsumer(
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
@@ -36,6 +40,7 @@ public sealed class BookingConfirmedConsumer : BackgroundService
         }).Build();
     }
 
+    /// <summary>Запускает цикл чтения Kafka до остановки приложения.</summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _consumer.Subscribe(KafkaTopics.BookingConfirmed);
@@ -70,12 +75,16 @@ public sealed class BookingConfirmedConsumer : BackgroundService
                         continue;
                     }
 
+                    // BackgroundService — singleton, поэтому scoped-репозиторий и
+                    // DbContext разрешаются только через отдельный scope сообщения.
                     using var scope = _scopeFactory.CreateScope();
                     var handler = scope.ServiceProvider
                         .GetRequiredService<IBookingConfirmedHandler>();
                     var result = await handler.HandleAsync(message, stoppingToken);
 
                     LogResult(message, result);
+                    // Offset фиксируется только после успешной обработки. При сбое
+                    // сообщение будет доставлено повторно и остановлено inbox-проверкой.
                     _consumer.Commit(consumed);
                 }
                 catch (JsonException exception)
@@ -103,6 +112,7 @@ public sealed class BookingConfirmedConsumer : BackgroundService
         }
     }
 
+    /// <summary>Записывает результат обработки сообщения с подходящим уровнем журнала.</summary>
     private void LogResult(
         BookingConfirmed message,
         BookingConfirmationResult result)

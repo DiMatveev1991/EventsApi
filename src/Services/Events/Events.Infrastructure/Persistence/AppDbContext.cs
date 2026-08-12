@@ -9,12 +9,17 @@ namespace EventsApi.Infrastructure.Persistence
     /// </summary>
     public sealed class AppDbContext : DbContext
     {
+        /// <summary>Создаёт контекст с настройками, переданными composition root.</summary>
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
+        /// <summary>Набор событий.</summary>
         public DbSet<Event> Events => Set<Event>();
+
+        /// <summary>Inbox обработанных подтверждений бронирований.</summary>
         public DbSet<ProcessedBookingMessage> ProcessedBookingMessages =>
             Set<ProcessedBookingMessage>();
 
+        /// <summary>Подключает конфигурации сущностей текущей сборки.</summary>
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // Автоматически подключаем все IEntityTypeConfiguration<T> из сборки.
