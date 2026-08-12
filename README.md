@@ -125,9 +125,16 @@ JWT выдаёт только Users. Все сервисы используют 
     dotnet build EventsApi.sln --configuration Release --no-restore
     dotnet test EventsApi.sln --configuration Release --no-build
 
-Тесты проверяют общий контракт, доменные инварианты мест и броней, лимит активных
-броней, проверку владельца и PBKDF2-хеширование. GitHub Actions выполняет restore,
-format verification, Release build и все тесты на каждый push и pull request.
+Решение содержит два тестовых проекта:
+
+- `EventsApi.Tests` — unit-тесты сервисов Users, Events и Bookings, доменных
+  инвариантов, JWT/PBKDF2, авторизации, фильтрации, пагинации и Kafka-контракта;
+- `EventsApi.IntegrationTests` — проверки трёх независимых EF Core-контекстов,
+  репозиториев, индексов, миграций, inbox-идемпотентности и обработки
+  `BookingConfirmed`.
+
+GitHub Actions выполняет restore, format verification, Release build, оба
+тестовых проекта и полный Docker smoke-сценарий на каждый push и pull request.
 
 ## Структура
 
@@ -148,6 +155,9 @@ format verification, Release build и все тесты на каждый push �
             ├── Bookings.Application
             ├── Bookings.Infrastructure
             └── Bookings.Presentation
+
+    EventsApi.Tests/
+    EventsApi.IntegrationTests/
 
 В каждом сервисе направление зависимостей одинаково:
 Presentation связывает Application и Infrastructure; Infrastructure реализует
