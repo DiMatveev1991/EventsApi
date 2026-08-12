@@ -1,150 +1,116 @@
 using EventsApi.Application.Services;
 using EventsApi.Domain.Exceptions;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class EventServiceValidationTests : IDisposable
+public sealed class EventServiceValidationTests : IDisposable
 {
-    private readonly ServiceProvider _sp;
-    private readonly IEventService _sut;
+    private readonly ServiceProvider _provider = EventTestHost.Build();
+    private IEventService Service => _provider.GetRequiredService<IEventService>();
 
-    public EventServiceValidationTests()
-    {
-        _sp = TestHost.Build();
-        _sut = _sp.GetRequiredService<IEventService>();
-    }
-
-    public void Dispose() => _sp.Dispose();
+    public void Dispose() => _provider.Dispose();
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public async Task Create_WithEmptyOrWhitespaceTitle_ThrowsValidationException(string? title)
+    public async Task Create_rejects_empty_title(string? title)
     {
-        // Arrange
-        var dto = TestData.CreateDto(title: title!);
+        var action = () => Service.CreateAsync(TestData.CreateEvent(title: title!));
 
-        // Act
-        var act = async () => await _sut.CreateAsync(dto);
-
-        // Assert
-        (await act.Should()
-            .ThrowAsync<ValidationException>()
-            .Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
-            .Which.Errors.Should().ContainKey("Title");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("Title");
     }
 
     [Fact]
-    public async Task Create_WithEndAtBeforeStartAt_ThrowsValidationException()
+    public async Task Create_rejects_end_before_start()
     {
-        var dto = TestData.CreateDto(
-            startAt: new DateTime(2025, 06, 01, 12, 00, 00),
-            endAt: new DateTime(2025, 06, 01, 10, 00, 00));
+        var start = DateTimeOffset.UtcNow.AddDays(2);
+        var action = () => Service.CreateAsync(
+            TestData.CreateEvent(startAt: start, endAt: start.AddMinutes(-1)));
 
-        var act = async () => await _sut.CreateAsync(dto);
-
-        (await act.Should()
-            .ThrowAsync<ValidationException>())
-            .Which.Errors.Should().ContainKey("EndAt");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("EndAt");
     }
 
     [Fact]
-    public async Task Create_WithEqualStartAndEnd_ThrowsValidationException()
+    public async Task Create_rejects_equal_start_and_end()
     {
-        var when = new DateTime(2025, 06, 01, 10, 00, 00);
-        var dto = TestData.CreateDto(startAt: when, endAt: when);
+        var at = DateTimeOffset.UtcNow.AddDays(2);
+        var action = () => Service.CreateAsync(TestData.CreateEvent(startAt: at, endAt: at));
 
-        var act = async () => await _sut.CreateAsync(dto);
-
-        await act.Should().ThrowAsync<ValidationException>();
+        await action.Should().ThrowAsync<ValidationException>();
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     [InlineData(-100)]
-    public async Task Create_WithNonPositiveTotalSeats_ThrowsValidationException(int totalSeats)
+    public async Task Create_rejects_non_positive_capacity(int seats)
     {
-        // Arrange
-        var dto = TestData.CreateDto(totalSeats: totalSeats);
+        var action = () => Service.CreateAsync(TestData.CreateEvent(totalSeats: seats));
 
-        // Act
-        var act = async () => await _sut.CreateAsync(dto);
-
-        // Assert
-        (await act.Should()
-            .ThrowAsync<ValidationException>()
-            .Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
-            .Which.Errors.Should().ContainKey("TotalSeats");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("TotalSeats");
     }
 
     [Fact]
-    public async Task Create_WithNullTotalSeats_ThrowsValidationException()
+    public async Task Create_rejects_missing_capacity()
     {
-        // Arrange
-        var dto = TestData.CreateDto(totalSeats: null);
+        var action = () => Service.CreateAsync(TestData.CreateEvent(totalSeats: null));
 
-        // Act
-        var act = async () => await _sut.CreateAsync(dto);
-
-        // Assert
-        (await act.Should()
-            .ThrowAsync<ValidationException>()
-            .Where(ex => ex.StatusCode == StatusCodes.Status400BadRequest))
-            .Which.Errors.Should().ContainKey("TotalSeats");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("TotalSeats");
     }
 
     [Fact]
-    public async Task Update_WithEndAtBeforeStartAt_ThrowsValidationException()
+    public async Task Update_rejects_end_before_start()
     {
-        // Arrange
-        var existing = await _sut.CreateAsync(TestData.CreateDto());
-        var badUpdate = TestData.UpdateDto(
-            startAt: new DateTime(2025, 07, 01, 12, 00, 00),
-            endAt: new DateTime(2025, 07, 01, 10, 00, 00));
+        var existing = await Service.CreateAsync(TestData.CreateEvent());
+        var start = DateTimeOffset.UtcNow.AddDays(2);
+        var action = () => Service.UpdateAsync(
+            existing.Id,
+            TestData.UpdateEvent(startAt: start, endAt: start.AddMinutes(-1)));
 
-        // Act
-        var act = async () => await _sut.UpdateAsync(existing.Id, badUpdate);
-
-        // Assert
-        (await act.Should()
-            .ThrowAsync<ValidationException>())
-            .Which.Errors.Should().ContainKey("EndAt");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("EndAt");
     }
 
     [Fact]
-    public async Task Update_WithEmptyTitle_ThrowsValidationException()
+    public async Task Update_rejects_empty_title()
     {
-        var existing = await _sut.CreateAsync(TestData.CreateDto());
-        var badUpdate = TestData.UpdateDto(title: "");
+        var existing = await Service.CreateAsync(TestData.CreateEvent());
+        var action = () => Service.UpdateAsync(existing.Id, TestData.UpdateEvent(title: ""));
 
-        var act = async () => await _sut.UpdateAsync(existing.Id, badUpdate);
-
-        (await act.Should()
-            .ThrowAsync<ValidationException>())
-            .Which.Errors.Should().ContainKey("Title");
+        var exception = await action.Should().ThrowAsync<ValidationException>();
+        exception.Which.Errors.Should().ContainKey("Title");
     }
 
     [Fact]
-    public async Task Create_WithNullDto_ThrowsArgumentNullException()
+    public async Task Create_rejects_null_dto()
     {
-        var act = async () => await _sut.CreateAsync(null!);
+        var action = () => Service.CreateAsync(null!);
 
-        await act.Should().ThrowAsync<ArgumentNullException>();
+        await action.Should().ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
-    public async Task Update_WithNullDto_ThrowsArgumentNullException()
+    public async Task Update_rejects_null_dto()
     {
-        var existing = await _sut.CreateAsync(TestData.CreateDto());
+        var existing = await Service.CreateAsync(TestData.CreateEvent());
+        var action = () => Service.UpdateAsync(existing.Id, null!);
 
-        var act = async () => await _sut.UpdateAsync(existing.Id, null!);
+        await action.Should().ThrowAsync<ArgumentNullException>();
+    }
 
-        await act.Should().ThrowAsync<ArgumentNullException>();
+    [Fact]
+    public async Task GetAll_rejects_null_query()
+    {
+        var action = () => Service.GetAllAsync(null!);
+
+        await action.Should().ThrowAsync<ArgumentNullException>();
     }
 }

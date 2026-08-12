@@ -1,201 +1,141 @@
-using EventsApi.Application.BackgroundServices;
-using EventsApi.Application.Services;
-using EventsApi.Domain.Entities;
-using EventsApi.Domain.Enums;
-using EventsApi.Infrastructure.Persistence;
+using System.Reflection;
+using Bookings.Application.Abstractions;
+using Bookings.Application.BackgroundServices;
+using Bookings.Domain.Entities;
+using Bookings.Domain.Enums;
+using Contracts;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class BookingProcessorTests : IDisposable
+public sealed class BookingProcessorTests
 {
-    /// <summary>
-    /// Время ожидания обработки. Сервис делает Task.Delay(2 сек) на каждую бронь
-    /// и опрашивает раз в 500 мс. 10 секунд — с большим запасом для CI.
-    /// </summary>
-    private static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(10);
-
-    private readonly ServiceProvider _sp;
-
-    public BookingProcessorTests()
+    [Fact]
+    public async Task Processor_saves_confirmation_before_publishing_and_marks_delivery()
     {
-        _sp = TestHost.Build();
+        var booking = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 2);
+        var repository = new FakeBookingRepository(booking);
+        var publisher = new FakePublisher(repository);
+        using var provider = BuildProvider(repository, publisher);
+        var processor = new BookingProcessor(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<BookingProcessor>.Instance,
+            Options.Create(new BookingProcessingOptions()));
+
+        await InvokeProcessAsync(processor, booking.Id);
+
+        booking.Status.Should().Be(BookingStatus.Confirmed);
+        booking.ConfirmationPublishedAt.Should().NotBeNull();
+        repository.SaveCalls.Should().Be(2);
+        publisher.WasConfirmedAndSavedAtPublish.Should().BeTrue();
+        publisher.Messages.Should().ContainSingle(message =>
+            message.BookingId == booking.Id &&
+            message.EventId == booking.EventId &&
+            message.UserId == booking.UserId &&
+            message.Seats == booking.Seats);
     }
 
-    public void Dispose() => _sp.Dispose();
-
-    private BookingProcessor CreateProcessor() =>
-        new(_sp.GetRequiredService<IServiceScopeFactory>(),
-            NullLogger<BookingProcessor>.Instance);
-
-    private async Task<Guid> CreateEventAsync(int totalSeats = 100)
+    [Fact]
+    public async Task Publish_failure_leaves_confirmed_booking_for_retry()
     {
-        using var scope = _sp.CreateScope();
-        var events = scope.ServiceProvider.GetRequiredService<IEventService>();
-        var ev = await events.CreateAsync(TestData.CreateDto(totalSeats: totalSeats));
-        return ev.Id;
+        var booking = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var repository = new FakeBookingRepository(booking);
+        var publisher = new FakePublisher(repository) { ThrowOnPublish = true };
+        using var provider = BuildProvider(repository, publisher);
+        var processor = new BookingProcessor(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<BookingProcessor>.Instance,
+            Options.Create(new BookingProcessingOptions()));
+
+        await InvokeProcessAsync(processor, booking.Id);
+
+        booking.Status.Should().Be(BookingStatus.Confirmed);
+        booking.ConfirmationPublishedAt.Should().BeNull();
+        repository.SaveCalls.Should().Be(1);
+        publisher.Messages.Should().ContainSingle();
     }
 
-    private async Task<Guid> AddPendingBookingAsync(Guid eventId)
+    private static ServiceProvider BuildProvider(
+        FakeBookingRepository repository,
+        FakePublisher publisher)
     {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var booking = Booking.CreatePending(eventId, Guid.NewGuid());
-        db.Bookings.Add(booking);
-        await db.SaveChangesAsync();
-        return booking.Id;
+        var services = new ServiceCollection();
+        services.AddSingleton(repository);
+        services.AddSingleton(publisher);
+        services.AddScoped<IBookingRepository>(serviceProvider =>
+            serviceProvider.GetRequiredService<FakeBookingRepository>());
+        services.AddScoped<IBookingEventPublisher>(serviceProvider =>
+            serviceProvider.GetRequiredService<FakePublisher>());
+        return services.BuildServiceProvider();
     }
 
-    private async Task DeleteEventAsync(Guid eventId)
+    private static async Task InvokeProcessAsync(BookingProcessor processor, Guid bookingId)
     {
-        // Отдельный scope: событие удаляется без отслеживания брони, поэтому бронь
-        // остаётся в базе и будет отклонена фоновым сервисом.
-        using var scope = _sp.CreateScope();
-        var events = scope.ServiceProvider.GetRequiredService<IEventService>();
-        await events.DeleteAsync(eventId);
+        var method = typeof(BookingProcessor).GetMethod(
+            "ProcessAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+
+        var task = method!.Invoke(
+            processor,
+            new object[] { bookingId, CancellationToken.None }) as Task;
+        task.Should().NotBeNull();
+        await task!;
     }
 
-    private async Task<Booking?> GetBookingAsync(Guid bookingId)
+    private sealed class FakeBookingRepository(Booking booking) : IBookingRepository
     {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.Bookings.AsNoTracking().FirstOrDefaultAsync(b => b.Id == bookingId);
-    }
+        public int SaveCalls { get; private set; }
 
-    private async Task<int> PendingCountAsync()
-    {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.Bookings.CountAsync(b => b.Status == BookingStatus.Pending);
-    }
+        public Task<Booking?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(id == booking.Id ? booking : null);
 
-    private async Task<List<Booking>> AllBookingsAsync()
-    {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.Bookings.AsNoTracking().ToListAsync();
-    }
+        public Task<IReadOnlyList<Guid>> GetPendingIdsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Guid>>(new[] { booking.Id });
 
-    private async Task<Booking> WaitUntilProcessedAsync(Guid bookingId)
-    {
-        var deadline = DateTime.UtcNow + MaxWait;
-        while (DateTime.UtcNow < deadline)
+        public Task<IReadOnlyList<Guid>> GetUnpublishedConfirmedIdsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Guid>>(Array.Empty<Guid>());
+
+        public Task<int> CountActiveByUserIdAsync(
+            Guid userId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
+
+        public Task AddAsync(
+            Booking value,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            var booking = await GetBookingAsync(bookingId);
-            if (booking is not null && booking.Status != BookingStatus.Pending)
-                return booking;
-
-            await Task.Delay(100);
+            SaveCalls++;
+            return Task.CompletedTask;
         }
-
-        throw new TimeoutException(
-            $"Бронь {bookingId} не была обработана за {MaxWait.TotalSeconds} сек");
     }
 
-    [Fact]
-    public async Task ProcessesPendingBooking_ToConfirmed_WhenEventExists()
+    private sealed class FakePublisher(FakeBookingRepository repository)
+        : IBookingEventPublisher
     {
-        // Arrange
-        var evId = await CreateEventAsync();
-        var bookingId = await AddPendingBookingAsync(evId);
-        var processor = CreateProcessor();
+        public List<BookingConfirmed> Messages { get; } = new();
+        public bool ThrowOnPublish { get; init; }
+        public bool WasConfirmedAndSavedAtPublish { get; private set; }
 
-        // Act
-        await processor.StartAsync(CancellationToken.None);
-        var processed = await WaitUntilProcessedAsync(bookingId);
-        await processor.StopAsync(CancellationToken.None);
-
-        // Assert
-        processed.Status.Should().Be(BookingStatus.Confirmed);
-        processed.ProcessedAt.Should().NotBeNull();
-        processed.ProcessedAt!.Value.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(15));
-    }
-
-    [Fact]
-    public async Task ProcessesPendingBooking_ToRejected_WhenEventDeleted()
-    {
-        // Arrange
-        var evId = await CreateEventAsync();
-        var bookingId = await AddPendingBookingAsync(evId);
-
-        // Удаляем событие до того, как фоновый сервис до него доберётся.
-        await DeleteEventAsync(evId);
-
-        // Act
-        var processor = CreateProcessor();
-        await processor.StartAsync(CancellationToken.None);
-        var processed = await WaitUntilProcessedAsync(bookingId);
-        await processor.StopAsync(CancellationToken.None);
-
-        // Assert
-        processed.Status.Should().Be(BookingStatus.Rejected);
-        processed.ProcessedAt.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task ProcessesMultiplePendingBookings_InParallel()
-    {
-        // Arrange
-        var evId = await CreateEventAsync();
-        await AddPendingBookingAsync(evId);
-        await AddPendingBookingAsync(evId);
-        await AddPendingBookingAsync(evId);
-
-        // Act
-        var started = DateTime.UtcNow;
-        var processor = CreateProcessor();
-        await processor.StartAsync(CancellationToken.None);
-
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (DateTime.UtcNow < deadline)
+        public Task PublishAsync(
+            BookingConfirmed message,
+            CancellationToken cancellationToken = default)
         {
-            if (await PendingCountAsync() == 0) break;
-            await Task.Delay(200);
+            Messages.Add(message);
+            WasConfirmedAndSavedAtPublish = repository.SaveCalls >= 1;
+            if (ThrowOnPublish)
+                throw new InvalidOperationException("Kafka is unavailable");
+            return Task.CompletedTask;
         }
-        var elapsed = DateTime.UtcNow - started;
-
-        await processor.StopAsync(CancellationToken.None);
-
-        // Assert
-        (await PendingCountAsync()).Should().Be(0);
-        (await AllBookingsAsync()).Should().OnlyContain(b => b.Status == BookingStatus.Confirmed);
-
-        // Задержки выполняются параллельно: 3 брони по 2 сек обрабатываются
-        // значительно быстрее, чем 6 сек последовательной обработки.
-        elapsed.Should().BeLessThan(TimeSpan.FromSeconds(6));
-    }
-
-    [Fact]
-    public async Task StopAsync_CancelsGracefully_WithoutThrowing()
-    {
-        // Arrange
-        var processor = CreateProcessor();
-
-        // Act
-        await processor.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
-        var act = async () => await processor.StopAsync(CancellationToken.None);
-
-        // Assert
-        await act.Should().NotThrowAsync();
-    }
-
-    [Fact]
-    public async Task DoesNothing_WhenNoPendingBookings()
-    {
-        // Arrange
-        var processor = CreateProcessor();
-
-        // Act
-        await processor.StartAsync(CancellationToken.None);
-        await Task.Delay(1500); // даём сервису поработать на пустой базе
-        await processor.StopAsync(CancellationToken.None);
-
-        // Assert
-        (await AllBookingsAsync()).Should().BeEmpty();
     }
 }

@@ -5,144 +5,113 @@ using Xunit;
 
 namespace EventsApi.Tests;
 
-public class EventServiceFilteringTests : IAsyncLifetime
+public sealed class EventServiceFilteringTests : IAsyncLifetime
 {
-    private readonly ServiceProvider _sp;
-    private readonly IEventService _sut;
-
-    public EventServiceFilteringTests()
-    {
-        _sp = TestHost.Build();
-        _sut = _sp.GetRequiredService<IEventService>();
-    }
+    private readonly ServiceProvider _provider = EventTestHost.Build();
+    private IEventService Service => _provider.GetRequiredService<IEventService>();
 
     public async Task InitializeAsync()
     {
-        // Набор данных для всех тестов фильтрации
-        await _sut.CreateAsync(TestData.CreateDto(
-            title: "DevDays Конференция",
-            startAt: new DateTime(2025, 06, 01, 10, 00, 00),
-            endAt: new DateTime(2025, 06, 01, 18, 00, 00)));
-
-        await _sut.CreateAsync(TestData.CreateDto(
-            title: "C# Митап",
-            startAt: new DateTime(2025, 07, 15, 18, 00, 00),
-            endAt: new DateTime(2025, 07, 15, 20, 00, 00)));
-
-        await _sut.CreateAsync(TestData.CreateDto(
-            title: "JS Митап",
-            startAt: new DateTime(2025, 08, 20, 18, 00, 00),
-            endAt: new DateTime(2025, 08, 20, 20, 00, 00)));
-
-        await _sut.CreateAsync(TestData.CreateDto(
-            title: "Новогодний вечер",
-            startAt: new DateTime(2025, 12, 31, 20, 00, 00),
-            endAt: new DateTime(2025, 12, 31, 23, 59, 00)));
+        await Service.CreateAsync(TestData.CreateEvent(
+            "DevDays Conference", startAt: At(6, 1, 10), endAt: At(6, 1, 18)));
+        await Service.CreateAsync(TestData.CreateEvent(
+            "C# Meetup", startAt: At(7, 15, 18), endAt: At(7, 15, 20)));
+        await Service.CreateAsync(TestData.CreateEvent(
+            "JS Meetup", startAt: At(8, 20, 18), endAt: At(8, 20, 20)));
+        await Service.CreateAsync(TestData.CreateEvent(
+            "New Year Party", startAt: At(12, 31, 20), endAt: At(12, 31, 23, 59)));
     }
 
     public Task DisposeAsync()
     {
-        _sp.Dispose();
+        _provider.Dispose();
         return Task.CompletedTask;
     }
 
     [Fact]
-    public async Task Filter_ByTitle_PartialMatch_IsCaseInsensitive()
+    public async Task Title_filter_is_partial_and_case_insensitive()
     {
-        // Act
-        var result = await _sut.GetAllAsync(TestData.Query(title: "митап"));
+        var result = await Service.GetAllAsync(TestData.Query(title: "meetUP"));
 
-        // Assert
         result.TotalCount.Should().Be(2);
-        result.Items.Should().OnlyContain(e => e.Title.Contains("Митап"));
+        result.Items.Should().OnlyContain(item => item.Title.Contains("Meetup"));
     }
 
     [Fact]
-    public async Task Filter_ByTitle_NoMatches_ReturnsEmpty()
+    public async Task Unknown_title_returns_empty_page()
     {
-        var result = await _sut.GetAllAsync(TestData.Query(title: "балет"));
+        var result = await Service.GetAllAsync(TestData.Query(title: "ballet"));
 
         result.TotalCount.Should().Be(0);
         result.Items.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task Filter_ByTitle_EmptyOrWhitespace_Ignored()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task Empty_title_filter_is_ignored(string? title)
     {
-        // Пустая и пробельная строка — как будто фильтр не передан
-        var empty = await _sut.GetAllAsync(TestData.Query(title: ""));
-        var whitespace = await _sut.GetAllAsync(TestData.Query(title: "   "));
+        var result = await Service.GetAllAsync(TestData.Query(title: title));
 
-        empty.TotalCount.Should().Be(4);
-        whitespace.TotalCount.Should().Be(4);
+        result.TotalCount.Should().Be(4);
     }
 
     [Fact]
-    public async Task Filter_From_ReturnsOnlyEventsStartingAtOrAfter()
+    public async Task From_filter_returns_events_starting_at_or_after_boundary()
     {
-        // Act — начиная с 15 июля 2025
-        var result = await _sut.GetAllAsync(TestData.Query(from: new DateTime(2025, 07, 15)));
+        var boundary = At(7, 15, 18);
+        var result = await Service.GetAllAsync(TestData.Query(from: boundary));
 
-        // Assert — должны попасть C# Митап, JS Митап, Новогодний вечер
         result.TotalCount.Should().Be(3);
-        result.Items.Should().OnlyContain(e => e.StartAt >= new DateTime(2025, 07, 15));
+        result.Items.Should().OnlyContain(item => item.StartAt >= boundary);
     }
 
     [Fact]
-    public async Task Filter_To_ReturnsOnlyEventsEndingAtOrBefore()
+    public async Task To_filter_returns_events_ending_at_or_before_boundary()
     {
-        // Act — не позже конца августа
-        var result = await _sut.GetAllAsync(TestData.Query(to: new DateTime(2025, 08, 31, 23, 59, 59)));
+        var boundary = At(8, 31, 23, 59);
+        var result = await Service.GetAllAsync(TestData.Query(to: boundary));
 
-        // Assert — Новогодний вечер отсечён
         result.TotalCount.Should().Be(3);
-        result.Items.Should().OnlyContain(e => e.EndAt <= new DateTime(2025, 08, 31, 23, 59, 59));
+        result.Items.Should().OnlyContain(item => item.EndAt <= boundary);
     }
 
     [Fact]
-    public async Task Filter_FromAndTo_CombinedAsLogicalAnd()
+    public async Task Date_filters_are_combined_with_logical_and()
     {
-        // Только события, которые и начинаются не раньше 1 июля, и заканчиваются не позже конца августа
-        var result = await _sut.GetAllAsync(TestData.Query(
-            from: new DateTime(2025, 07, 01),
-            to: new DateTime(2025, 08, 31, 23, 59, 59)));
+        var result = await Service.GetAllAsync(TestData.Query(
+            from: At(7, 1), to: At(8, 31, 23, 59)));
 
-        // Подходят: C# Митап (15 июля) и JS Митап (20 августа)
-        result.TotalCount.Should().Be(2);
-        result.Items.Select(e => e.Title).Should().BeEquivalentTo(new[] { "C# Митап", "JS Митап" });
+        result.Items.Select(item => item.Title)
+            .Should().BeEquivalentTo(new[] { "C# Meetup", "JS Meetup" });
     }
 
     [Fact]
-    public async Task Filter_ByTitleAndDates_CombinedAsLogicalAnd()
+    public async Task Title_and_date_filters_are_combined()
     {
-        // title=митап + диапазон июль–август → только C# Митап и JS Митап
-        var result = await _sut.GetAllAsync(TestData.Query(
-            title: "Митап",
-            from: new DateTime(2025, 07, 01),
-            to: new DateTime(2025, 08, 31, 23, 59, 59)));
+        var result = await Service.GetAllAsync(TestData.Query(
+            title: "meetup", from: At(8, 1), to: At(8, 31, 23, 59)));
 
-        result.TotalCount.Should().Be(2);
-        result.Items.Should().OnlyContain(e =>
-            e.Title.Contains("Митап", StringComparison.OrdinalIgnoreCase));
+        result.Items.Should().ContainSingle(item => item.Title == "JS Meetup");
     }
 
     [Fact]
-    public async Task Filter_FromBoundary_IsInclusive()
+    public async Task From_boundary_is_inclusive()
     {
-        // Точное совпадение с датой начала события
-        var result = await _sut.GetAllAsync(TestData.Query(from: new DateTime(2025, 07, 15, 18, 00, 00)));
+        var result = await Service.GetAllAsync(TestData.Query(from: At(7, 15, 18)));
 
-        // C# Митап стартует ровно в это время — должен быть включён
-        result.Items.Should().Contain(e => e.Title == "C# Митап");
+        result.Items.Should().Contain(item => item.Title == "C# Meetup");
     }
 
     [Fact]
-    public async Task Filter_ToBoundary_IsInclusive()
+    public async Task To_boundary_is_inclusive()
     {
-        // Точное совпадение с датой окончания события
-        var result = await _sut.GetAllAsync(TestData.Query(to: new DateTime(2025, 06, 01, 18, 00, 00)));
+        var result = await Service.GetAllAsync(TestData.Query(to: At(6, 1, 18)));
 
-        result.TotalCount.Should().Be(1);
-        result.Items.Should().ContainSingle(e => e.Title == "DevDays Конференция");
+        result.Items.Should().ContainSingle(item => item.Title == "DevDays Conference");
     }
+
+    private static DateTimeOffset At(int month, int day, int hour = 0, int minute = 0) =>
+        new(2030, month, day, hour, minute, 0, TimeSpan.Zero);
 }

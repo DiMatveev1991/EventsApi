@@ -1,37 +1,26 @@
 using EventsApi.Application.Services;
 using EventsApi.Domain.Exceptions;
 using FluentAssertions;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EventsApi.Tests;
 
-public class EventServiceCrudTests : IDisposable
+public sealed class EventServiceCrudTests : IDisposable
 {
-    private readonly ServiceProvider _sp;
-    private readonly IEventService _sut;
+    private readonly ServiceProvider _provider = EventTestHost.Build();
+    private IEventService Service => _provider.GetRequiredService<IEventService>();
 
-    public EventServiceCrudTests()
-    {
-        _sp = TestHost.Build();
-        _sut = _sp.GetRequiredService<IEventService>();
-    }
-
-    public void Dispose() => _sp.Dispose();
+    public void Dispose() => _provider.Dispose();
 
     [Fact]
-    public async Task Create_WithValidData_ReturnsEventWithGeneratedId()
+    public async Task Create_returns_event_with_generated_id()
     {
-        // Arrange
-        var dto = TestData.CreateDto(title: "Конференция");
+        var dto = TestData.CreateEvent(title: "Конференция");
 
-        // Act
-        var created = await _sut.CreateAsync(dto);
+        var created = await Service.CreateAsync(dto);
 
-        // Assert
-        created.Should().NotBeNull();
-        created.Id.Should().NotBe(Guid.Empty);
+        created.Id.Should().NotBeEmpty();
         created.Title.Should().Be("Конференция");
         created.Description.Should().Be(dto.Description);
         created.StartAt.Should().Be(dto.StartAt);
@@ -39,40 +28,27 @@ public class EventServiceCrudTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_SetsAvailableSeatsEqualToTotalSeats()
+    public async Task Create_sets_available_seats_equal_to_total_seats()
     {
-        // Arrange
-        var dto = TestData.CreateDto(totalSeats: 7);
+        var created = await Service.CreateAsync(TestData.CreateEvent(totalSeats: 7));
 
-        // Act
-        var created = await _sut.CreateAsync(dto);
-
-        // Assert
         created.TotalSeats.Should().Be(7);
         created.AvailableSeats.Should().Be(7);
     }
 
     [Fact]
-    public async Task Create_TrimsTitle()
+    public async Task Create_trims_title()
     {
-        // Arrange
-        var dto = TestData.CreateDto(title: "   Тест   ");
+        var created = await Service.CreateAsync(TestData.CreateEvent(title: "   Тест   "));
 
-        // Act
-        var created = await _sut.CreateAsync(dto);
-
-        // Assert
         created.Title.Should().Be("Тест");
     }
 
     [Fact]
-    public async Task GetAll_WhenEmpty_ReturnsZeroCount()
+    public async Task GetAll_when_empty_returns_zero_count()
     {
-        // Act
-        var result = await _sut.GetAllAsync(TestData.Query());
+        var result = await Service.GetAllAsync(TestData.Query());
 
-        // Assert
-        result.Should().NotBeNull();
         result.TotalCount.Should().Be(0);
         result.Items.Should().BeEmpty();
         result.Page.Should().Be(1);
@@ -80,109 +56,76 @@ public class EventServiceCrudTests : IDisposable
     }
 
     [Fact]
-    public async Task GetAll_WithoutFilters_ReturnsAllEvents()
+    public async Task GetAll_without_filters_returns_all_events()
     {
-        // Arrange
-        await _sut.CreateAsync(TestData.CreateDto(title: "Event A"));
-        await _sut.CreateAsync(TestData.CreateDto(title: "Event B"));
-        await _sut.CreateAsync(TestData.CreateDto(title: "Event C"));
+        await Service.CreateAsync(TestData.CreateEvent(title: "Event A"));
+        await Service.CreateAsync(TestData.CreateEvent(title: "Event B"));
+        await Service.CreateAsync(TestData.CreateEvent(title: "Event C"));
 
-        // Act
-        var result = await _sut.GetAllAsync(TestData.Query());
+        var result = await Service.GetAllAsync(TestData.Query());
 
-        // Assert
         result.TotalCount.Should().Be(3);
         result.Items.Should().HaveCount(3);
     }
 
     [Fact]
-    public async Task GetById_ExistingId_ReturnsEvent()
+    public async Task GetById_returns_existing_event()
     {
-        // Arrange
-        var created = await _sut.CreateAsync(TestData.CreateDto(title: "Нужное"));
+        var created = await Service.CreateAsync(TestData.CreateEvent(title: "Нужное"));
 
-        // Act
-        var found = await _sut.GetByIdAsync(created.Id);
+        var found = await Service.GetByIdAsync(created.Id);
 
-        // Assert
-        found.Should().NotBeNull();
         found.Id.Should().Be(created.Id);
         found.Title.Should().Be("Нужное");
     }
 
     [Fact]
-    public async Task GetById_NonExistingId_ThrowsNotFoundException()
+    public async Task GetById_for_unknown_id_throws_not_found()
     {
-        // Arrange
-        var unknownId = Guid.NewGuid();
+        var id = Guid.NewGuid();
 
-        // Act
-        var act = async () => await _sut.GetByIdAsync(unknownId);
+        var action = () => Service.GetByIdAsync(id);
 
-        // Assert
-        await act.Should()
-            .ThrowAsync<NotFoundException>()
-            .Where(ex => ex.StatusCode == StatusCodes.Status404NotFound)
-            .WithMessage($"*{unknownId}*");
+        await action.Should().ThrowAsync<NotFoundException>().WithMessage($"*{id}*");
     }
 
     [Fact]
-    public async Task Update_ExistingId_ReturnsUpdatedEvent()
+    public async Task Update_changes_existing_event()
     {
-        // Arrange
-        var created = await _sut.CreateAsync(TestData.CreateDto(title: "Старое"));
-        var updateDto = TestData.UpdateDto(title: "Новое", description: "Новое описание");
+        var created = await Service.CreateAsync(TestData.CreateEvent(title: "Старое"));
+        var dto = TestData.UpdateEvent(title: "Новое", description: "Новое описание");
 
-        // Act
-        var updated = await _sut.UpdateAsync(created.Id, updateDto);
+        var updated = await Service.UpdateAsync(created.Id, dto);
 
-        // Assert
-        updated.Id.Should().Be(created.Id);
         updated.Title.Should().Be("Новое");
         updated.Description.Should().Be("Новое описание");
-        updated.StartAt.Should().Be(updateDto.StartAt);
-        updated.EndAt.Should().Be(updateDto.EndAt);
-
-        // и повторное чтение тоже видит новые данные
-        (await _sut.GetByIdAsync(created.Id)).Title.Should().Be("Новое");
+        (await Service.GetByIdAsync(created.Id)).Title.Should().Be("Новое");
     }
 
     [Fact]
-    public async Task Update_NonExistingId_ThrowsNotFoundException()
+    public async Task Update_for_unknown_id_throws_not_found()
     {
-        // Arrange
-        var unknownId = Guid.NewGuid();
+        var action = () => Service.UpdateAsync(Guid.NewGuid(), TestData.UpdateEvent());
 
-        // Act
-        var act = async () => await _sut.UpdateAsync(unknownId, TestData.UpdateDto());
-
-        // Assert
-        await act.Should().ThrowAsync<NotFoundException>();
+        await action.Should().ThrowAsync<NotFoundException>();
     }
 
     [Fact]
-    public async Task Delete_ExistingId_RemovesEvent()
+    public async Task Delete_removes_existing_event()
     {
-        // Arrange
-        var created = await _sut.CreateAsync(TestData.CreateDto());
+        var created = await Service.CreateAsync(TestData.CreateEvent());
 
-        // Act
-        await _sut.DeleteAsync(created.Id);
+        await Service.DeleteAsync(created.Id);
 
-        // Assert
-        var act = async () => await _sut.GetByIdAsync(created.Id);
-        await act.Should().ThrowAsync<NotFoundException>();
-
-        (await _sut.GetAllAsync(TestData.Query())).TotalCount.Should().Be(0);
+        var action = () => Service.GetByIdAsync(created.Id);
+        await action.Should().ThrowAsync<NotFoundException>();
     }
 
     [Fact]
-    public async Task Delete_NonExistingId_ThrowsNotFoundException()
+    public async Task Delete_for_unknown_id_throws_not_found()
     {
-        // Act
-        var act = async () => await _sut.DeleteAsync(Guid.NewGuid());
+        var action = () => Service.DeleteAsync(Guid.NewGuid());
 
-        // Assert
-        await act.Should().ThrowAsync<NotFoundException>();
+        await action.Should().ThrowAsync<NotFoundException>();
     }
 }

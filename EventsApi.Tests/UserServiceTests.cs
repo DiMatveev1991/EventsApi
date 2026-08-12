@@ -1,71 +1,78 @@
-using EventsApi.Application.Abstractions;
-using EventsApi.Application.Dtos;
-using EventsApi.Application.Services;
-using EventsApi.Domain.Entities;
-using EventsApi.Domain.Enums;
-using EventsApi.Domain.Exceptions;
 using FluentAssertions;
+using Users.Application.Abstractions;
+using Users.Application.Dtos;
+using Users.Application.Services;
+using Users.Domain.Entities;
+using Users.Domain.Enums;
+using Users.Domain.Exceptions;
 using Xunit;
 
 namespace EventsApi.Tests;
 
 public sealed class UserServiceTests
 {
-    private readonly InMemoryUserRepository _users = new();
-    private readonly TestPasswordHasher _hasher = new();
-    private readonly UserService _sut;
+    private readonly FakeUserRepository _repository = new();
+    private readonly FakePasswordHasher _hasher = new();
+    private readonly UserService _service;
 
-    public UserServiceTests()
-    {
-        _sut = new UserService(_users, _hasher, new TestTokenService());
-    }
+    public UserServiceTests() =>
+        _service = new UserService(_repository, _hasher, new FakeTokenService());
 
     [Fact]
-    public async Task RegisterAsync_NormalizesLoginAndHashesPassword()
+    public async Task Register_normalizes_login_and_hashes_password()
     {
-        await _sut.RegisterAsync(new RegisterUserDto
+        await _service.RegisterAsync(new RegisterUserRequest
         {
             Login = "  Dmitry  ",
             Password = "Password123!",
             Role = UserRole.Admin
         });
 
-        var user = await _users.GetByLoginAsync("dmitry");
+        var user = await _repository.GetByLoginAsync("dmitry");
         user.Should().NotBeNull();
         user!.PasswordHash.Should().Be("hash:Password123!");
         user.Role.Should().Be(UserRole.Admin);
     }
 
     [Fact]
-    public async Task RegisterAsync_DuplicateLoginIgnoringCase_ThrowsBadRequest()
+    public async Task Register_persists_user_once()
     {
-        await _sut.RegisterAsync(new RegisterUserDto
-        {
-            Login = "dmitry",
-            Password = "Password123!"
-        });
-
-        var act = async () => await _sut.RegisterAsync(new RegisterUserDto
-        {
-            Login = "DMITRY",
-            Password = "AnotherPassword!"
-        });
-
-        await act.Should().ThrowAsync<ValidationException>();
-    }
-
-    [Fact]
-    public async Task LoginAsync_WithValidCredentials_ReturnsToken()
-    {
-        await _sut.RegisterAsync(new RegisterUserDto
+        await _service.RegisterAsync(new RegisterUserRequest
         {
             Login = "user",
             Password = "Password123!"
         });
 
-        var result = await _sut.LoginAsync(new LoginDto
+        _repository.AddCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Register_rejects_duplicate_login_ignoring_case_and_spaces()
+    {
+        await _service.RegisterAsync(new RegisterUserRequest
         {
-            Login = "USER",
+            Login = "dmitry",
+            Password = "Password123!"
+        });
+
+        var action = () => _service.RegisterAsync(new RegisterUserRequest
+        {
+            Login = "  DMITRY ",
+            Password = "AnotherPassword!"
+        });
+
+        await action.Should().ThrowAsync<ValidationException>();
+        _repository.AddCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Login_with_valid_credentials_returns_token()
+    {
+        await RegisterDefaultUser();
+
+        var result = await _service.LoginAsync(new LoginRequest
+        {
+            Login = " USER ",
             Password = "Password123!"
         });
 
@@ -75,51 +82,73 @@ public sealed class UserServiceTests
     [Theory]
     [InlineData("missing", "Password123!")]
     [InlineData("user", "wrong")]
-    public async Task LoginAsync_WithInvalidCredentials_ReturnsSameBadRequest(
+    public async Task Login_with_invalid_credentials_returns_same_error(
         string login,
         string password)
     {
-        await _sut.RegisterAsync(new RegisterUserDto
-        {
-            Login = "user",
-            Password = "Password123!"
-        });
+        await RegisterDefaultUser();
 
-        var act = async () => await _sut.LoginAsync(new LoginDto
+        var action = () => _service.LoginAsync(new LoginRequest
         {
             Login = login,
             Password = password
         });
 
-        await act.Should()
+        await action.Should()
             .ThrowAsync<ValidationException>()
-            .Where(exception => exception.StatusCode == 400)
             .WithMessage("Неверный логин или пароль");
     }
 
-    private sealed class InMemoryUserRepository : IUserRepository
+    [Fact]
+    public async Task Login_passes_normalized_login_to_repository()
+    {
+        await RegisterDefaultUser();
+
+        await _service.LoginAsync(new LoginRequest
+        {
+            Login = "  UsEr  ",
+            Password = "Password123!"
+        });
+
+        _repository.LastLookup.Should().Be("user");
+    }
+
+    private Task RegisterDefaultUser() => _service.RegisterAsync(new RegisterUserRequest
+    {
+        Login = "user",
+        Password = "Password123!"
+    });
+
+    private sealed class FakeUserRepository : IUserRepository
     {
         private readonly Dictionary<string, User> _users = new();
 
+        public int AddCalls { get; private set; }
+        public string? LastLookup { get; private set; }
+
         public Task<User?> GetByLoginAsync(
             string normalizedLogin,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(_users.GetValueOrDefault(normalizedLogin));
+            CancellationToken cancellationToken = default)
+        {
+            LastLookup = normalizedLogin;
+            return Task.FromResult(_users.GetValueOrDefault(normalizedLogin));
+        }
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default)
         {
+            AddCalls++;
             _users.Add(user.Login, user);
             return Task.CompletedTask;
         }
     }
 
-    private sealed class TestPasswordHasher : IPasswordHasher
+    private sealed class FakePasswordHasher : IPasswordHasher
     {
         public string Hash(string password) => $"hash:{password}";
         public bool Verify(string password, string passwordHash) => Hash(password) == passwordHash;
     }
 
-    private sealed class TestTokenService : ITokenService
+    private sealed class FakeTokenService : ITokenService
     {
         public string CreateToken(User user) => $"token:{user.Id}";
     }

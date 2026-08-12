@@ -4,7 +4,7 @@ namespace EventsApi.Tests;
 
 internal static class TestData
 {
-    public static CreateEventDto CreateDto(
+    public static CreateEventDto CreateEvent(
         string title = "Test Event",
         string? description = "Test description",
         DateTimeOffset? startAt = null,
@@ -14,12 +14,12 @@ internal static class TestData
         {
             Title = title,
             Description = description,
-            StartAt = startAt ?? new DateTimeOffset(2030, 06, 01, 10, 00, 00, TimeSpan.Zero),
-            EndAt = endAt ?? new DateTimeOffset(2030, 06, 01, 18, 00, 00, TimeSpan.Zero),
+            StartAt = startAt ?? new DateTimeOffset(2030, 6, 1, 10, 0, 0, TimeSpan.Zero),
+            EndAt = endAt ?? new DateTimeOffset(2030, 6, 1, 18, 0, 0, TimeSpan.Zero),
             TotalSeats = totalSeats
         };
 
-    public static UpdateEventDto UpdateDto(
+    public static UpdateEventDto UpdateEvent(
         string title = "Updated Event",
         string? description = "Updated description",
         DateTimeOffset? startAt = null,
@@ -28,8 +28,8 @@ internal static class TestData
         {
             Title = title,
             Description = description,
-            StartAt = startAt ?? new DateTimeOffset(2030, 07, 01, 10, 00, 00, TimeSpan.Zero),
-            EndAt = endAt ?? new DateTimeOffset(2030, 07, 01, 18, 00, 00, TimeSpan.Zero)
+            StartAt = startAt ?? new DateTimeOffset(2030, 7, 1, 10, 0, 0, TimeSpan.Zero),
+            EndAt = endAt ?? new DateTimeOffset(2030, 7, 1, 18, 0, 0, TimeSpan.Zero)
         };
 
     public static EventQueryParameters Query(

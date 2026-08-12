@@ -1,163 +1,127 @@
-using EventsApi.Domain.Entities;
-using EventsApi.Domain.Enums;
-using EventsApi.Infrastructure.Repositories;
+using Bookings.Domain.Entities;
+using Bookings.Domain.Enums;
+using Bookings.Infrastructure.Repositories;
 using EventsApi.IntegrationTests.Infrastructure;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Xunit;
 
-namespace EventsApi.IntegrationTests
+namespace EventsApi.IntegrationTests;
+
+[Collection(PostgreSqlCollection.Name)]
+public sealed class BookingRepositoryTests(PostgreSqlFixture fixture)
 {
-    /// <summary>
-    /// Интеграционные тесты <see cref="BookingRepository"/> на реальной PostgreSQL:
-    /// проверяют все методы репозитория, а также совместную с событием транзакцию
-    /// и ограничение внешнего ключа.
-    /// </summary>
-    public sealed class BookingRepositoryTests : IntegrationTestBase
+    [Fact]
+    public async Task Add_persists_pending_booking_with_cross_service_ids()
     {
-        public BookingRepositoryTests(PostgresDatabaseFixture fixture) : base(fixture) { }
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var booking = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 3);
 
-        [Fact]
-        public async Task AddAsync_persists_pending_booking()
-        {
-            // Arrange
-            var ev = await SeedEventAsync(TestData.Event(totalSeats: 10));
-            var booking = Booking.CreatePending(ev.Id, Guid.Empty);
+        await repository.AddAsync(booking);
+        database.Context.ChangeTracker.Clear();
+        var stored = await repository.GetByIdAsync(booking.Id);
 
-            // Act
-            await using (var ctx = CreateContext())
-            {
-                await new BookingRepository(ctx).AddAsync(booking);
-            }
+        stored.Should().NotBeNull();
+        stored!.EventId.Should().Be(booking.EventId);
+        stored.UserId.Should().Be(booking.UserId);
+        stored.Seats.Should().Be(3);
+        stored.Status.Should().Be(BookingStatus.Pending);
+    }
 
-            // Assert
-            await using (var ctx = CreateContext())
-            {
-                var stored = await new BookingRepository(ctx).GetByIdAsync(booking.Id);
-                stored.Should().NotBeNull();
-                stored!.EventId.Should().Be(ev.Id);
-                stored.Status.Should().Be(BookingStatus.Pending);
-                stored.ProcessedAt.Should().BeNull();
-            }
-        }
+    [Fact]
+    public async Task Get_unknown_booking_returns_null()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
 
-        [Fact]
-        public async Task AddAsync_saves_booking_and_seat_reservation_in_one_transaction()
-        {
-            // Arrange — событие с 5 местами
-            var ev = await SeedEventAsync(TestData.Event(totalSeats: 5));
+        (await repository.GetByIdAsync(Guid.NewGuid())).Should().BeNull();
+    }
 
-            // Act — резервируем место у отслеживаемого события и добавляем бронь
-            // в рамках одного контекста (как это делает BookingService).
-            await using (var ctx = CreateContext())
-            {
-                var eventRepository = new EventRepository(ctx);
-                var bookingRepository = new BookingRepository(ctx);
+    [Fact]
+    public async Task Save_persists_confirmation_transition()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var booking = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        await repository.AddAsync(booking);
 
-                var tracked = await eventRepository.GetByIdAsync(ev.Id);
-                tracked!.TryReserveSeats().Should().BeTrue();
+        booking.Confirm(DateTimeOffset.UtcNow);
+        await repository.SaveChangesAsync();
+        database.Context.ChangeTracker.Clear();
 
-                await bookingRepository.AddAsync(Booking.CreatePending(ev.Id, Guid.Empty));
-            }
+        (await repository.GetByIdAsync(booking.Id))!.Status.Should().Be(BookingStatus.Confirmed);
+    }
 
-            // Assert — и бронь сохранена, и AvailableSeats уменьшилось
-            await using (var ctx = CreateContext())
-            {
-                var stored = await new EventRepository(ctx).GetByIdAsync(ev.Id);
-                stored!.AvailableSeats.Should().Be(4);
-                (await ctx.Bookings.CountAsync()).Should().Be(1);
-            }
-        }
+    [Fact]
+    public async Task Pending_query_returns_only_pending_bookings()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var pending = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var confirmed = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        confirmed.Confirm(DateTimeOffset.UtcNow);
+        var cancelled = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        cancelled.Cancel(DateTimeOffset.UtcNow);
+        database.Context.AddRange(pending, confirmed, cancelled);
+        await database.Context.SaveChangesAsync();
 
-        [Fact]
-        public async Task GetByIdAsync_returns_null_when_booking_missing()
-        {
-            // Arrange
-            await using var ctx = CreateContext();
+        var ids = await repository.GetPendingIdsAsync();
 
-            // Act
-            var result = await new BookingRepository(ctx).GetByIdAsync(Guid.NewGuid());
+        ids.Should().ContainSingle().Which.Should().Be(pending.Id);
+    }
 
-            // Assert
-            result.Should().BeNull();
-        }
+    [Fact]
+    public async Task Unpublished_query_returns_only_confirmed_unpublished_bookings()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var unpublished = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        unpublished.Confirm(DateTimeOffset.UtcNow);
+        var published = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        published.Confirm(DateTimeOffset.UtcNow);
+        published.MarkConfirmationPublished(DateTimeOffset.UtcNow);
+        var pending = Booking.CreatePending(Guid.NewGuid(), Guid.NewGuid(), 1);
+        database.Context.AddRange(unpublished, published, pending);
+        await database.Context.SaveChangesAsync();
 
-        [Fact]
-        public async Task UpdateAsync_persists_status_transition()
-        {
-            // Arrange
-            var ev = await SeedEventAsync(TestData.Event(totalSeats: 3));
-            var booking = Booking.CreatePending(ev.Id, Guid.Empty);
-            await using (var ctx = CreateContext())
-            {
-                await new BookingRepository(ctx).AddAsync(booking);
-            }
+        var ids = await repository.GetUnpublishedConfirmedIdsAsync();
 
-            // Act — переводим бронь в Confirmed
-            var processedAt = DateTime.UtcNow;
-            await using (var ctx = CreateContext())
-            {
-                var repository = new BookingRepository(ctx);
-                var stored = await repository.GetByIdAsync(booking.Id);
-                stored!.Confirm(processedAt);
-                await repository.UpdateAsync(stored);
-            }
+        ids.Should().ContainSingle().Which.Should().Be(unpublished.Id);
+    }
 
-            // Assert
-            await using (var ctx = CreateContext())
-            {
-                var stored = await new BookingRepository(ctx).GetByIdAsync(booking.Id);
-                stored!.Status.Should().Be(BookingStatus.Confirmed);
-                stored.ProcessedAt.Should().NotBeNull();
-            }
-        }
+    [Fact]
+    public async Task Active_count_includes_pending_and_confirmed_but_not_cancelled()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var userId = Guid.NewGuid();
+        var pending = Booking.CreatePending(Guid.NewGuid(), userId, 1);
+        var confirmed = Booking.CreatePending(Guid.NewGuid(), userId, 1);
+        confirmed.Confirm(DateTimeOffset.UtcNow);
+        var cancelled = Booking.CreatePending(Guid.NewGuid(), userId, 1);
+        cancelled.Cancel(DateTimeOffset.UtcNow);
+        database.Context.AddRange(pending, confirmed, cancelled);
+        await database.Context.SaveChangesAsync();
 
-        [Fact]
-        public async Task GetPendingIdsAsync_returns_only_pending_bookings()
-        {
-            // Arrange
-            var ev = await SeedEventAsync(TestData.Event(totalSeats: 10));
-            var pending1 = Booking.CreatePending(ev.Id, Guid.Empty);
-            var pending2 = Booking.CreatePending(ev.Id, Guid.Empty);
-            var confirmed = Booking.CreatePending(ev.Id, Guid.Empty);
-            confirmed.Confirm(DateTime.UtcNow);
-            var rejected = Booking.CreatePending(ev.Id, Guid.Empty);
-            rejected.Reject(DateTime.UtcNow);
+        var count = await repository.CountActiveByUserIdAsync(userId);
 
-            await using (var ctx = CreateContext())
-            {
-                ctx.Bookings.AddRange(pending1, pending2, confirmed, rejected);
-                await ctx.SaveChangesAsync();
-            }
+        count.Should().Be(2);
+    }
 
-            // Act
-            await using var assertCtx = CreateContext();
-            var ids = await new BookingRepository(assertCtx).GetPendingIdsAsync();
+    [Fact]
+    public async Task Active_count_is_isolated_per_user()
+    {
+        await using var database = await PostgreSqlTestDatabase.CreateBookingsAsync(fixture);
+        var repository = new BookingRepository(database.Context);
+        var firstUser = Guid.NewGuid();
+        var secondUser = Guid.NewGuid();
+        database.Context.AddRange(
+            Booking.CreatePending(Guid.NewGuid(), firstUser, 1),
+            Booking.CreatePending(Guid.NewGuid(), firstUser, 1),
+            Booking.CreatePending(Guid.NewGuid(), secondUser, 1));
+        await database.Context.SaveChangesAsync();
 
-            // Assert
-            ids.Should().BeEquivalentTo(new[] { pending1.Id, pending2.Id });
-        }
-
-        [Fact]
-        public async Task AddAsync_violates_foreign_key_when_event_does_not_exist()
-        {
-            // Arrange — бронь ссылается на несуществующее событие
-            var booking = Booking.CreatePending(Guid.NewGuid(), Guid.Empty);
-
-            // Act
-            await using var ctx = CreateContext();
-            var act = async () => await new BookingRepository(ctx).AddAsync(booking);
-
-            // Assert — реальная БД отклоняет вставку из-за ограничения внешнего ключа
-            await act.Should().ThrowAsync<DbUpdateException>();
-        }
-
-        private async Task<Event> SeedEventAsync(Event ev)
-        {
-            await using var ctx = CreateContext();
-            ctx.Events.Add(ev);
-            await ctx.SaveChangesAsync();
-            return ev;
-        }
+        (await repository.CountActiveByUserIdAsync(firstUser)).Should().Be(2);
+        (await repository.CountActiveByUserIdAsync(secondUser)).Should().Be(1);
     }
 }
