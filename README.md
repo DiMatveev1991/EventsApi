@@ -1,4 +1,4 @@
-# Events system — Sprint 10
+# Events system — Sprint 11
 
 Система управления мероприятиями декомпозирована на три независимых ASP.NET Core
 микросервиса. Каждый сервис владеет своей PostgreSQL-базой и построен по Clean
@@ -101,8 +101,9 @@ Events API и подтверждает, что `GET /events/{id}` продолж
 
     docker compose up --build
 
-Команда поднимает Zookeeper, Kafka, Redis, три PostgreSQL, три API и автоматически
-применяет отдельные EF Core migrations каждого сервиса.
+Команда поднимает Zookeeper, Kafka, Redis, три PostgreSQL, три API, Prometheus,
+Jaeger и Grafana. При старте автоматически применяются отдельные EF Core
+migrations каждого сервиса.
 
 Эндпоинт `/health` каждого API проверяет собственную PostgreSQL-базу, а Events
 и Bookings дополнительно проверяют Kafka. Поэтому Docker и внешняя система
@@ -120,6 +121,55 @@ Events API и подтверждает, что `GET /events/{id}` продолж
 
     docker compose down -v
     docker compose up --build
+
+## Наблюдаемость
+
+Во всех трёх API подключён OpenTelemetry. ASP.NET Core instrumentation собирает
+входящие HTTP-запросы и RED-метрики, HttpClient instrumentation — исходящие
+HTTP-запросы, EF Core instrumentation — обращения к PostgreSQL, а Runtime
+instrumentation — метрики среды выполнения .NET. Имя каждого сервиса задаётся в
+`OpenTelemetry:ServiceName`, адрес OTLP — в `Otlp:Endpoint`. В Docker Compose
+адрес экспортера переопределяется значением `http://jaeger:4317`.
+
+| Компонент | Назначение | Адрес |
+|---|---|---|
+| Users metrics | метрики Users в формате Prometheus | http://localhost:5001/metrics |
+| Events metrics | метрики Events в формате Prometheus | http://localhost:5002/metrics |
+| Bookings metrics | метрики Bookings в формате Prometheus | http://localhost:5003/metrics |
+| Prometheus | хранение и запрос метрик, состояние targets | http://localhost:9090 |
+| Jaeger | поиск и просмотр распределённых трейсов | http://localhost:16686 |
+| Grafana | технический дашборд (admin / admin) | http://localhost:3000 |
+
+Prometheus читает настройки из `prometheus.yml` и опрашивает `/metrics` каждого
+API раз в 15 секунд. В `Status → Targets` должны быть три цели в состоянии `UP`:
+`users-service`, `events-service` и `bookings-service`.
+
+Трейсы экспортируются в Jaeger по OTLP/gRPC. После выполнения запросов через
+Swagger в Jaeger можно выбрать любой из трёх сервисов. Запросы, обращающиеся к
+базе, содержат серверный HTTP span и дочерние EF Core/SQL spans.
+
+Grafana автоматически получает источник данных Prometheus и дашборд
+`Events API observability` из каталога `monitoring/grafana`. Дашборд можно
+переключать между сервисами; в нём настроены:
+
+- latency HTTP-запросов — p50, p95 и p99 по
+  `http_server_request_duration_seconds`;
+- throughput в запросах в секунду по
+  `http_server_request_duration_seconds_count`;
+- доля HTTP 5xx в процентах (error rate);
+- число обрабатываемых запросов по `http_server_active_requests`.
+
+Быстрая проверка после запуска:
+
+    curl http://localhost:5001/metrics
+    curl http://localhost:5002/metrics
+    curl http://localhost:5003/metrics
+    curl http://localhost:9090/api/v1/targets
+    curl http://localhost:16686/api/services
+
+Serilog заменяет стандартный console provider во всех API. Каждая строка лога
+выводится как самостоятельный JSON-объект в формате CompactJsonFormatter; уровень
+логирования задаётся секцией `Serilog` соответствующего `appsettings.json`.
 
 ## Проверка сценария
 
