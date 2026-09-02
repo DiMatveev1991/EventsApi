@@ -10,8 +10,37 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Serilog;
+using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .WriteTo.Console(new CompactJsonFormatter()));
+
+var serviceName = builder.Configuration["OpenTelemetry:ServiceName"]
+    ?? throw new InvalidOperationException("OpenTelemetry:ServiceName is required.");
+var otlpEndpointValue = builder.Configuration["Otlp:Endpoint"];
+if (!Uri.TryCreate(otlpEndpointValue, UriKind.Absolute, out var otlpEndpoint))
+    throw new InvalidOperationException("Otlp:Endpoint must be an absolute URI.");
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(serviceName))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddOtlpExporter(options => options.Endpoint = otlpEndpoint))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddPrometheusExporter());
 
 // Presentation является composition root и связывает Application с конкретной
 // инфраструктурой, не разворачивая зависимости внутренних слоёв наружу.
@@ -102,6 +131,7 @@ using (var scope = app.Services.CreateScope())
 // Middleware ошибок расположен первым и преобразует исключения контроллеров
 // и следующих компонентов конвейера в единый Problem Details.
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseSerilogRequestLogging();
 
 // Swagger доступен в учебном окружении для ручного E2E-сценария.
 app.UseSwagger();
@@ -115,6 +145,7 @@ app.MapControllers();
 // Анонимный health endpoint нужен оркестратору и проверяет обязательные зависимости:
 // PostgreSQL и Kafka. Без них Bookings не может выполнить основной сценарий.
 app.MapHealthChecks("/health").AllowAnonymous();
+app.MapPrometheusScrapingEndpoint("/metrics").AllowAnonymous();
 app.Run();
 
 /// <summary>Маркер точки входа, используемый интеграционными тестами WebApplicationFactory.</summary>

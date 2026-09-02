@@ -8,8 +8,37 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Serilog;
+using Serilog.Formatting.Compact;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .WriteTo.Console(new CompactJsonFormatter()));
+
+var serviceName = builder.Configuration["OpenTelemetry:ServiceName"]
+    ?? throw new InvalidOperationException("OpenTelemetry:ServiceName is required.");
+var otlpEndpointValue = builder.Configuration["Otlp:Endpoint"];
+if (!Uri.TryCreate(otlpEndpointValue, UriKind.Absolute, out var otlpEndpoint))
+    throw new InvalidOperationException("Otlp:Endpoint must be an absolute URI.");
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(serviceName))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddOtlpExporter(options => options.Endpoint = otlpEndpoint))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddPrometheusExporter());
 
 // Presentation остаётся composition root: здесь связываются порты Application
 // с реализациями Infrastructure, а сами нижние слои не зависят от Web API.
@@ -93,6 +122,7 @@ using (var scope = app.Services.CreateScope())
 // Обработчик исключений ставится первым, чтобы сформировать Problem Details для
 // ошибок всех следующих middleware и контроллеров.
 app.UseGlobalExceptionHandler();
+app.UseSerilogRequestLogging();
 
 // Swagger включён для учебного проекта во всех окружениях, чтобы сервисы можно
 // было проверить сразу после docker compose up.
@@ -107,6 +137,7 @@ app.MapControllers();
 // Health endpoint открыт для Docker healthcheck. Redis намеренно не включён:
 // кеш необязателен, и его недоступность не должна выводить Events из эксплуатации.
 app.MapHealthChecks("/health").AllowAnonymous();
+app.MapPrometheusScrapingEndpoint("/metrics").AllowAnonymous();
 app.Run();
 
 /// <summary>Маркер точки входа, используемый интеграционными тестами WebApplicationFactory.</summary>

@@ -5,12 +5,41 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Serilog;
+using Serilog.Formatting.Compact;
 using Users.Application.DependencyInjection;
 using Users.Infrastructure.DependencyInjection;
 using Users.Infrastructure.Persistence;
 using Users.Presentation.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) =>
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .WriteTo.Console(new CompactJsonFormatter()));
+
+var serviceName = builder.Configuration["OpenTelemetry:ServiceName"]
+    ?? throw new InvalidOperationException("OpenTelemetry:ServiceName is required.");
+var otlpEndpointValue = builder.Configuration["Otlp:Endpoint"];
+if (!Uri.TryCreate(otlpEndpointValue, UriKind.Absolute, out var otlpEndpoint))
+    throw new InvalidOperationException("Otlp:Endpoint must be an absolute URI.");
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(serviceName))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddOtlpExporter(options => options.Endpoint = otlpEndpoint))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddPrometheusExporter());
 
 // Presentation выступает единственным composition root и связывает абстракции
 // Application с реализациями Infrastructure.
@@ -94,6 +123,7 @@ using (var scope = app.Services.CreateScope())
 
 // Обработчик ошибок должен охватывать весь оставшийся HTTP-конвейер.
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseSerilogRequestLogging();
 
 // Swagger оставлен включённым для воспроизводимой проверки учебного проекта.
 app.UseSwagger();
@@ -106,6 +136,7 @@ app.MapControllers();
 
 // Health endpoint доступен без JWT для Docker и проверяет обязательный PostgreSQL.
 app.MapHealthChecks("/health").AllowAnonymous();
+app.MapPrometheusScrapingEndpoint("/metrics").AllowAnonymous();
 app.Run();
 
 /// <summary>Маркер точки входа, используемый интеграционными тестами WebApplicationFactory.</summary>
